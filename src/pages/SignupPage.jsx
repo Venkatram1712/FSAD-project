@@ -1,18 +1,110 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
-import { useAuth } from "../Context/AuthContext";
+import { useAuth } from "../Context/AuthContext.jsx";
 import { Button } from "../components/button";
 import { Input } from "../components/input";
 import { Label } from "../components/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/card";
 import { GraduationCap } from "lucide-react";
+
+const GOOGLE_SCRIPT_URL = "https://accounts.google.com/gsi/client";
+
+function loadGoogleScript() {
+  if (typeof window === "undefined") {
+    return Promise.resolve(false);
+  }
+
+  if (window.google?.accounts?.id) {
+    return Promise.resolve(true);
+  }
+
+  return new Promise((resolve) => {
+    const existingScript = document.querySelector(`script[src=\"${GOOGLE_SCRIPT_URL}\"]`);
+    if (existingScript) {
+      existingScript.addEventListener("load", () => resolve(true), { once: true });
+      existingScript.addEventListener("error", () => resolve(false), { once: true });
+      return;
+    }
+
+    const script = document.createElement("script");
+    script.src = GOOGLE_SCRIPT_URL;
+    script.async = true;
+    script.defer = true;
+    script.onload = () => resolve(true);
+    script.onerror = () => resolve(false);
+    document.head.appendChild(script);
+  });
+}
+
+function getTargetPathByRole(user) {
+  if (user?.role === "admin") {
+    return "/admin";
+  }
+
+  if (user?.role === "counselor") {
+    return "/counselor";
+  }
+
+  return user?.questionnaireCompleted ? "/student" : "/questionnaire";
+}
+
 function SignupPage() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
-  const { signup } = useAuth();
+  const [googleError, setGoogleError] = useState("");
+  const googleButtonRef = useRef(null);
+  const { signup, googleLogin } = useAuth();
   const navigate = useNavigate();
+
+  useEffect(() => {
+    const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
+    if (!clientId) {
+      return;
+    }
+
+    let isMounted = true;
+
+    (async () => {
+      const scriptLoaded = await loadGoogleScript();
+      if (!isMounted || !scriptLoaded || !googleButtonRef.current || !window.google?.accounts?.id) {
+        return;
+      }
+
+      window.google.accounts.id.initialize({
+        client_id: clientId,
+        callback: async (response) => {
+          if (!response?.credential) {
+            setGoogleError("Google login failed. Please try again.");
+            return;
+          }
+
+          const googleResult = await googleLogin(response.credential, "student");
+          if (!googleResult?.success || !googleResult?.user) {
+            setGoogleError(googleResult?.error || "Google login failed. Please try again.");
+            return;
+          }
+
+          navigate(getTargetPathByRole(googleResult.user));
+        }
+      });
+
+      googleButtonRef.current.innerHTML = "";
+      window.google.accounts.id.renderButton(googleButtonRef.current, {
+        theme: "outline",
+        size: "large",
+        shape: "rectangular",
+        width: 320,
+        text: "signup_with"
+      });
+    })();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [googleLogin, navigate]);
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError("");
@@ -20,15 +112,18 @@ function SignupPage() {
       setError("Please fill in all fields");
       return;
     }
-    const success = await signup(name, email, password);
+    const signupResult = await signup(name, email, password);
 
-    if (!success) {
-      setError("Registration failed or email already exists");
+    if (!signupResult?.success || !signupResult?.user) {
+      setError(signupResult?.error || "Registration failed. Please check backend API.");
       return;
     }
 
-    navigate("/questionnaire");
+    navigate(getTargetPathByRole(signupResult.user));
   };
+
+  const canUseGoogle = Boolean(import.meta.env.VITE_GOOGLE_CLIENT_ID);
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
       <Card className="w-full max-w-md">
@@ -81,6 +176,21 @@ function SignupPage() {
               Sign Up
             </Button>
           </form>
+          <div className="my-4 flex items-center gap-2">
+            <div className="h-px flex-1 bg-slate-200" />
+            <span className="text-xs text-slate-500">OR</span>
+            <div className="h-px flex-1 bg-slate-200" />
+          </div>
+          {canUseGoogle ? (
+            <div className="flex justify-center">
+              <div ref={googleButtonRef} />
+            </div>
+          ) : (
+            <p className="text-xs text-slate-500 text-center">
+              Set VITE_GOOGLE_CLIENT_ID in frontend .env to enable Google Sign Up.
+            </p>
+          )}
+          {googleError && <p className="mt-2 text-sm text-red-600 text-center">{googleError}</p>}
           <div className="mt-4 text-center text-sm">
             Already have an account? <Link to="/login" className="text-indigo-600 hover:underline">Login</Link>
           </div>

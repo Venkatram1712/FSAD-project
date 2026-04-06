@@ -1,7 +1,8 @@
 import { jsx, jsxs } from "react/jsx-runtime";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { useAuth } from "../Context/AuthContext";
+import { useAuth } from "../Context/AuthContext.jsx";
+import { saveQuestionnaireResponse } from "../utils/userManagement";
 import { Button } from "../components/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/card";
 import { Label } from "../components/label";
@@ -9,7 +10,7 @@ import { Textarea } from "../components/textarea";
 import { RadioGroup, RadioGroupItem } from "../components/radio-group";
 import { Checkbox } from "../components/checkbox";
 import { Progress } from "../components/progress";
-import { ArrowLeft, ArrowRight, CheckCircle } from "lucide-react";
+import { ArrowLeft, ArrowRight, CheckCircle, Loader2 } from "lucide-react";
 const interestOptions = [
   "Technology & Computing",
   "Healthcare & Medicine",
@@ -34,11 +35,25 @@ const industryOptions = [
   "Non-Profit",
   "Government"
 ];
+
+function getRoleHomeRoute(role) {
+  if (role === "admin") {
+    return "/admin";
+  }
+
+  if (role === "counselor") {
+    return "/counselor";
+  }
+
+  return "/student";
+}
+
 function CareerQuestionnaire() {
   const navigate = useNavigate();
   const { user, markQuestionnaireCompleted } = useAuth();
   const [step, setStep] = useState(1);
   const totalSteps = 4;
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [formData, setFormData] = useState({
     interests: [],
     strengths: "",
@@ -49,6 +64,13 @@ function CareerQuestionnaire() {
     skills: "",
     timeline: ""
   });
+
+  useEffect(() => {
+    if (user?.questionnaireCompleted) {
+      navigate(getRoleHomeRoute(user.role), { replace: true });
+    }
+  }, [user, navigate]);
+
   const handleInterestToggle = (interest) => {
     setFormData((prev) => ({
       ...prev,
@@ -62,17 +84,38 @@ function CareerQuestionnaire() {
     }));
   };
   const handleSubmit = async () => {
-    await markQuestionnaireCompleted();
-    const redirectRole = user?.role;
+    if (!user?.id) {
+      console.error("User ID not available");
+      return;
+    }
 
-    if (redirectRole === "student") {
-      navigate("/student");
-    } else if (redirectRole === "counselor") {
-      navigate("/counselor");
-    } else if (redirectRole === "admin") {
-      navigate("/admin");
-    } else {
-      navigate("/login");
+    setIsSubmitting(true);
+    try {
+      // Save questionnaire response to backend
+      const saveResult = await saveQuestionnaireResponse(user.id, formData);
+      
+      if (!saveResult.success) {
+        console.warn("Failed to save questionnaire response:", saveResult.error);
+        // Continue anyway - we'll still mark as completed locally
+      }
+
+      // Mark questionnaire as completed
+      await markQuestionnaireCompleted();
+
+      // Navigate to appropriate dashboard
+      const redirectRole = user?.role;
+      if (redirectRole === "student") {
+        navigate("/student");
+      } else if (redirectRole === "counselor") {
+        navigate("/counselor");
+      } else if (redirectRole === "admin") {
+        navigate("/admin");
+      } else {
+        navigate("/login");
+      }
+    } catch (error) {
+      console.error("Error completing questionnaire:", error);
+      setIsSubmitting(false);
     }
   };
   const progress = step / totalSteps * 100;
@@ -282,11 +325,16 @@ function CareerQuestionnaire() {
           Button,
           {
             onClick: handleSubmit,
-            disabled: !canProceed(),
+            disabled: !canProceed() || isSubmitting,
             className: "bg-green-600 hover:bg-green-700",
             children: [
-              "Complete",
-              /* @__PURE__ */ jsx(CheckCircle, { className: "ml-2 h-4 w-4" })
+              isSubmitting ? /* @__PURE__ */ jsxs("span", { className: "flex items-center", children: [
+                /* @__PURE__ */ jsx(Loader2, { className: "mr-2 h-4 w-4 animate-spin" }),
+                "Completing..."
+              ] }) : /* @__PURE__ */ jsxs("span", { className: "flex items-center", children: [
+                "Complete",
+                /* @__PURE__ */ jsx(CheckCircle, { className: "ml-2 h-4 w-4" })
+              ] })
             ]
           }
         )

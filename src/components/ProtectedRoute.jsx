@@ -1,6 +1,6 @@
 import { Fragment, jsx, jsxs } from "react/jsx-runtime";
 import { Navigate } from "react-router-dom";
-import { useAuth } from "../Context/AuthContext";
+import { useAuth } from "../Context/AuthContext.jsx";
 function ProtectedRoute({ children, allowedRole }) {
   const { user, isLoading } = useAuth();
   if (isLoading) {

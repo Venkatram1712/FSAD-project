@@ -5,11 +5,17 @@ const SIGNUP_EVENTS_STORAGE_KEY = "signupEvents";
 const LOGIN_EVENTS_STORAGE_KEY = "loginEvents";
 const ACTIVE_SESSIONS_STORAGE_KEY = "activeSessions";
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8080";
-const API_ENABLED = Boolean(API_BASE_URL);
+const API_BASE_URL = String(import.meta.env.VITE_API_BASE_URL || "").trim().replace(/\/+$/, "");
+const API_ENABLED = true;
 const DEFAULT_USERS_ENDPOINTS = ["/api/users", "/api/auth/users", "/api/admin/users"];
+const DEFAULT_STUDENTS_ENDPOINTS = ["/api/auth/users/students", "/api/users/students", "/api/students"];
 
 const CONFIGURED_USERS_ENDPOINTS = String(import.meta.env.VITE_USERS_ENDPOINTS || "")
+  .split(",")
+  .map((endpoint) => endpoint.trim())
+  .filter(Boolean);
+
+const CONFIGURED_STUDENTS_ENDPOINTS = String(import.meta.env.VITE_STUDENTS_ENDPOINTS || "")
   .split(",")
   .map((endpoint) => endpoint.trim())
   .filter(Boolean);
@@ -17,6 +23,23 @@ const CONFIGURED_USERS_ENDPOINTS = String(import.meta.env.VITE_USERS_ENDPOINTS |
 const signupEventsStore = [];
 const loginEventsStore = [];
 const activeSessionsStore = new Map();
+
+function buildApiUrl(path) {
+  const normalizedPath = String(path || "");
+  if (!API_BASE_URL) {
+    return normalizedPath;
+  }
+
+  if (API_BASE_URL.endsWith("/") && normalizedPath.startsWith("/")) {
+    return `${API_BASE_URL.slice(0, -1)}${normalizedPath}`;
+  }
+
+  if (!API_BASE_URL.endsWith("/") && !normalizedPath.startsWith("/")) {
+    return `${API_BASE_URL}/${normalizedPath}`;
+  }
+
+  return `${API_BASE_URL}${normalizedPath}`;
+}
 
 function normalizeRole(role) {
   return String(role || "student").trim().toLowerCase();
@@ -35,9 +58,16 @@ function inferCreatedAtFromId(id) {
   return new Date().toISOString();
 }
 
+function hasQuestionnaireCompletedField(user) {
+  return Boolean(user) && Object.prototype.hasOwnProperty.call(user, "questionnaireCompleted");
+}
+
 function sanitizeUser(rawUser) {
   const id = String(rawUser?.id || rawUser?.userId || Date.now());
   const role = normalizeRole(rawUser?.role);
+  const questionnaireCompleted = hasQuestionnaireCompletedField(rawUser)
+    ? Boolean(rawUser?.questionnaireCompleted)
+    : undefined;
 
   return {
     id,
@@ -47,15 +77,37 @@ function sanitizeUser(rawUser) {
     role,
     status: rawUser?.status ? String(rawUser.status).toLowerCase() : "active",
     specialization: String(rawUser?.specialization || "").trim(),
-    questionnaireCompleted: Boolean(rawUser?.questionnaireCompleted),
+    phone: String(rawUser?.phone || "").trim(),
+    bio: String(rawUser?.bio || "").trim(),
+    institution: String(rawUser?.institution || "").trim(),
+    experienceYears: Number.isFinite(Number(rawUser?.experienceYears)) ? Number(rawUser.experienceYears) : null,
+    questionnaireCompleted,
     createdAt: rawUser?.createdAt || inferCreatedAtFromId(id),
     updatedAt: rawUser?.updatedAt || rawUser?.createdAt || inferCreatedAtFromId(id)
   };
 }
 
 function mapApiUser(apiPayload, email, password) {
-  const payloadUser = apiPayload?.user || apiPayload;
+  const payloadUser =
+    apiPayload?.user ||
+    apiPayload?.data?.user ||
+    apiPayload?.data ||
+    apiPayload?.result?.user ||
+    apiPayload?.result ||
+    apiPayload;
+
+  if (apiPayload?.success === false) {
+    return null;
+  }
+
   if (!payloadUser || typeof payloadUser !== "object") {
+    return null;
+  }
+
+  const hasKnownUserField = ["id", "userId", "email", "name", "fullName", "role"].some((key) =>
+    Object.prototype.hasOwnProperty.call(payloadUser, key)
+  );
+  if (!hasKnownUserField) {
     return null;
   }
 
@@ -67,7 +119,7 @@ function mapApiUser(apiPayload, email, password) {
     role: payloadUser.role || "student",
     status: payloadUser.status || "active",
     specialization: payloadUser.specialization || "",
-    questionnaireCompleted: Boolean(payloadUser.questionnaireCompleted),
+    questionnaireCompleted: payloadUser.questionnaireCompleted,
     createdAt: payloadUser.createdAt,
     updatedAt: new Date().toISOString()
   });
@@ -78,12 +130,22 @@ function mapApiUsers(payload) {
     return [];
   }
 
+  if (payload?.success === false) {
+    return [];
+  }
+
   const list = Array.isArray(payload)
     ? payload
     : Array.isArray(payload.users)
       ? payload.users
+      : Array.isArray(payload?.data?.users)
+        ? payload.data.users
       : Array.isArray(payload.data)
         ? payload.data
+        : Array.isArray(payload?.result?.users)
+          ? payload.result.users
+        : Array.isArray(payload?.result)
+          ? payload.result
         : [];
 
   return list.map((item) => sanitizeUser(item));
@@ -100,8 +162,9 @@ async function requestFirst(method, paths, data) {
     try {
       const response = await axios({
         method,
-        url: `${API_BASE_URL}${path}`,
-        data
+        url: buildApiUrl(path),
+        data,
+        timeout: 10000
       });
 
       return response?.data ?? null;
@@ -118,10 +181,13 @@ async function requestFirst(method, paths, data) {
     .map((entry) => `${entry.path}:${entry.status ?? "ERR"}`)
     .join(", ");
 
-  throw new Error(
-    `Unable to load users from API. Checked endpoints at ${API_BASE_URL}: ${attempted || "none"}. ` +
+  const requestError = new Error(
+    `API request failed (${String(method || "get").toUpperCase()}). ` +
+      `Checked endpoints at ${API_BASE_URL || "(dev proxy /api)"}: ${attempted || "none"}. ` +
       "Set VITE_USERS_ENDPOINTS in frontend env to your backend users endpoint."
   );
+  requestError.attemptedPaths = requestErrors;
+  throw requestError;
 }
 
 async function fetchUsersFromApi() {
@@ -138,19 +204,83 @@ async function authenticateUser(email, password) {
   }
 
   try {
-    const response = await axios.post(`${API_BASE_URL}/api/auth/login`, {
+    const response = await axios.post(buildApiUrl("/api/auth/login"), {
       email: normalizedEmail,
       password
     });
 
+    if (response?.data?.success === false) {
+      return {
+        success: false,
+        user: null,
+        source: "none",
+        error: response?.data?.message || "INVALID_CREDENTIALS"
+      };
+    }
+
     const mappedUser = mapApiUser(response?.data, normalizedEmail, password);
     if (!mappedUser) {
-      return { success: false, user: null, source: "none" };
+      return {
+        success: false,
+        user: null,
+        source: "none",
+        error: "INVALID_LOGIN_RESPONSE"
+      };
     }
 
     return { success: true, user: mappedUser, source: "api" };
-  } catch {
+  } catch (error) {
+    return {
+      success: false,
+      user: null,
+      source: "none",
+      error:
+        error?.response?.data?.message ||
+        error?.response?.data?.error ||
+        (error?.response?.status === 401 ? "Invalid credentials" : "Unable to connect to backend")
+    };
+  }
+}
+
+async function authenticateWithGoogleToken(token, role = "student") {
+  const normalizedToken = String(token || "").trim();
+  if (!API_ENABLED || !normalizedToken) {
     return { success: false, user: null, source: "none" };
+  }
+
+  try {
+    const response = await axios.post(buildApiUrl("/api/auth/google"), {
+      token: normalizedToken,
+      role: toBackendRole(role)
+    });
+
+    if (response?.data?.success === false) {
+      return {
+        success: false,
+        user: null,
+        source: "none",
+        error: response?.data?.message || "GOOGLE_LOGIN_FAILED"
+      };
+    }
+
+    const mappedUser = mapApiUser(response?.data, "", "");
+    if (!mappedUser) {
+      return {
+        success: false,
+        user: null,
+        source: "none",
+        error: "INVALID_GOOGLE_LOGIN_RESPONSE"
+      };
+    }
+
+    return { success: true, user: mappedUser, source: "api" };
+  } catch (error) {
+    return {
+      success: false,
+      user: null,
+      source: "none",
+      error: error?.response?.data?.message || "Google login failed"
+    };
   }
 }
 
@@ -161,14 +291,30 @@ async function registerUserInApi(payload) {
     password: payload.password,
     role: toBackendRole(payload.role),
     status: payload.status,
-    specialization: payload.specialization
+    specialization: payload.specialization,
+    phone: payload.phone,
+    bio: payload.bio,
+    institution: payload.institution,
+    experienceYears: payload.experienceYears
   });
 
   if (!responseData) {
-    return { success: false, user: null };
+    return { success: false, user: null, error: "EMPTY_REGISTER_RESPONSE" };
   }
 
-  return { success: true, user: mapApiUser(responseData, payload.email, payload.password) };
+  const mappedUser = mapApiUser(responseData, payload.email, payload.password);
+  if (!mappedUser) {
+    return {
+      success: false,
+      user: null,
+      error:
+        responseData?.message ||
+        responseData?.error ||
+        "INVALID_REGISTER_RESPONSE"
+    };
+  }
+
+  return { success: true, user: mappedUser };
 }
 
 async function createUser(payload, options = {}) {
@@ -188,7 +334,7 @@ async function createUser(payload, options = {}) {
     role: payload?.role,
     status: payload?.status || "active",
     specialization: payload?.specialization || "",
-    questionnaireCompleted: payload?.questionnaireCompleted || false,
+    questionnaireCompleted: payload?.questionnaireCompleted ?? false,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   });
@@ -222,29 +368,59 @@ async function updateUserById(userId, updates) {
     role: updates?.role ? toBackendRole(updates.role) : undefined
   };
 
-  const responseData = await requestFirst("put", [
-    `/api/users/${userId}`,
-    `/api/admin/users/${userId}`,
-    `/api/auth/users/${userId}`
-  ], payload);
+  try {
+    const responseData = await requestFirst("put", [
+      `/api/users/${userId}`,
+      `/api/admin/users/${userId}`,
+      `/api/auth/users/${userId}`
+    ], payload);
 
-  if (!responseData) {
-    return { success: false, error: "NOT_FOUND" };
+    if (!responseData) {
+      return { success: false, error: "Empty response from backend" };
+    }
+
+    const updated = mapApiUser(responseData, payload.email, "");
+    if (!updated) {
+      return {
+        success: false,
+        error: responseData?.message || responseData?.error || "Invalid user update response"
+      };
+    }
+
+    return { success: true, user: updated };
+  } catch (error) {
+    return {
+      success: false,
+      error:
+        error?.response?.data?.message ||
+        error?.message ||
+        "Unable to save profile to backend"
+    };
   }
-
-  const updated = mapApiUser(responseData, payload.email, "") || sanitizeUser({ id: userId, ...updates });
-  return { success: true, user: updated };
 }
 
 async function deleteUserById(userId) {
-  const responseData = await requestFirst("delete", [
-    `/api/users/${userId}`,
-    `/api/admin/users/${userId}`,
-    `/api/auth/users/${userId}`
-  ]);
+  try {
+    await requestFirst("delete", [
+      `/api/users/${userId}`,
+      `/api/admin/users/${userId}`,
+      `/api/auth/users/${userId}`
+    ]);
+  } catch (error) {
+    const attemptedPaths = Array.isArray(error?.attemptedPaths) ? error.attemptedPaths : [];
+    const methodNotSupported = attemptedPaths.length > 0 && attemptedPaths.every((entry) => {
+      const status = Number(entry?.status);
+      return status === 404 || status === 405;
+    });
 
-  if (!responseData) {
-    return { success: false, error: "NOT_FOUND" };
+    if (methodNotSupported) {
+      throw new Error(
+        "Delete endpoint is not available in backend API. " +
+          "Please implement DELETE /api/auth/users/{id} (or configure VITE_USERS_ENDPOINTS to a users route that supports DELETE)."
+      );
+    }
+
+    throw error;
   }
 
   clearActiveSession(userId);
@@ -322,6 +498,18 @@ async function getUsersByRole(role) {
   return users.filter((user) => user.role === normalizedRole);
 }
 
+async function getStudents() {
+  const endpointCandidates = [
+    ...new Set([...CONFIGURED_STUDENTS_ENDPOINTS, ...DEFAULT_STUDENTS_ENDPOINTS])
+  ];
+
+  const responseData = await requestFirst("get", endpointCandidates);
+  const students = mapApiUsers(responseData);
+
+  // Keep only student records in case backend endpoint returns mixed users.
+  return students.filter((student) => student.role === "student");
+}
+
 function saveUsers(users) {
   return users.map(sanitizeUser);
 }
@@ -343,25 +531,359 @@ async function getAdminMetrics() {
   };
 }
 
+async function saveQuestionnaireResponse(userId, responseData) {
+  if (!API_ENABLED) {
+    console.warn("API disabled: questionnaire response not saved");
+    return { success: false, error: "API_DISABLED" };
+  }
+
+  try {
+    const payload = {
+      userId,
+      interests: Array.isArray(responseData.interests) ? responseData.interests : [],
+      strengths: String(responseData.strengths || "").trim(),
+      careerGoals: String(responseData.careerGoals || "").trim(),
+      educationLevel: String(responseData.educationLevel || "").trim(),
+      industries: Array.isArray(responseData.industries) ? responseData.industries : [],
+      workStyle: String(responseData.workStyle || "").trim(),
+      skills: String(responseData.skills || "").trim(),
+      timeline: String(responseData.timeline || "").trim(),
+      submittedAt: new Date().toISOString()
+    };
+
+    const response = await axios.post(
+      buildApiUrl("/api/questionnaire/responses"),
+      payload
+    );
+
+    return {
+      success: true,
+      responseId: response?.data?.id || response?.data?.responseId,
+      data: response?.data
+    };
+  } catch (error) {
+    console.error("Failed to save questionnaire response:", error?.response?.status, error?.message);
+    return {
+      success: false,
+      error: error?.response?.status || "SAVE_FAILED"
+    };
+  }
+}
+
+// ============== SESSION MANAGEMENT ==============
+
+async function createSession(sessionData) {
+  if (!API_ENABLED) {
+    return {
+      success: false,
+      error: "API_DISABLED"
+    };
+  }
+
+  try {
+    const normalizedDate = String(sessionData.sessionDate || "").trim();
+    const normalizedStartTime = String(sessionData.sessionStartTime || sessionData.sessionTime || "").trim();
+    const normalizedEndTime = String(sessionData.sessionEndTime || "").trim();
+    const dateTime = normalizedDate && normalizedStartTime
+      ? `${normalizedDate}T${normalizedStartTime}:00`
+      : normalizedDate;
+    const endDateTime = normalizedDate && normalizedEndTime
+      ? `${normalizedDate}T${normalizedEndTime}:00`
+      : null;
+
+    const payload = {
+      counselorId: sessionData.counselorId,
+      studentId: sessionData.studentId,
+      topic: sessionData.sessionName,
+      date: dateTime,
+      time: normalizedStartTime,
+      startTime: normalizedStartTime,
+      endTime: normalizedEndTime,
+      endDateTime,
+      notes: sessionData.description,
+      status: sessionData.status || "scheduled",
+      createdAt: new Date().toISOString()
+    };
+
+    const response = await axios.post(
+      buildApiUrl("/api/sessions"),
+      payload
+    );
+
+    return {
+      success: true,
+      sessionId: response?.data?.data?.id || response?.data?.id || response?.data?.sessionId,
+      data: response?.data
+    };
+  } catch (error) {
+    console.error("Failed to create session:", error?.message);
+    return {
+      success: false,
+      error: error?.response?.data?.message || error?.response?.status || "CREATE_FAILED"
+    };
+  }
+}
+
+function normalizeSession(item) {
+  const dateValue = item?.date || item?.sessionDate || item?.startDateTime || "";
+  const startTime = item?.startTime || item?.time || item?.sessionTime || "";
+  const endTime = item?.endTime || item?.sessionEndTime || "";
+  const normalizedId = item?.id || item?.sessionId || item?.session_id || item?.sessionID;
+
+  return {
+    ...item,
+    id: normalizedId,
+    date: dateValue,
+    time: startTime,
+    startTime,
+    endTime,
+    status: String(item?.status || "scheduled").toLowerCase()
+  };
+}
+
+async function getSessionsByCounselor(counselorId) {
+  if (!API_ENABLED) {
+    return [];
+  }
+
+  try {
+    const response = await axios.get(
+      buildApiUrl(`/api/sessions/counselor/${counselorId}`)
+    );
+
+    const sessions = Array.isArray(response?.data)
+      ? response.data
+      : Array.isArray(response?.data?.sessions)
+        ? response.data.sessions
+        : [];
+
+    return sessions.map(normalizeSession);
+  } catch (error) {
+    console.error("Failed to fetch counselor sessions from API:", error?.message);
+    return [];
+  }
+}
+
+async function getSessionsByStudent(studentId) {
+  if (!API_ENABLED) {
+    return [];
+  }
+
+  try {
+    const response = await axios.get(
+      buildApiUrl(`/api/sessions/student/${studentId}`)
+    );
+
+    const sessions = Array.isArray(response?.data)
+      ? response.data
+      : Array.isArray(response?.data?.sessions)
+        ? response.data.sessions
+        : [];
+
+    return sessions.map(normalizeSession);
+  } catch (error) {
+    console.error("Failed to fetch student sessions from API:", error?.message);
+    return [];
+  }
+}
+
+async function updateSessionSchedule(sessionId, payload) {
+  if (!API_ENABLED) {
+    return { success: false, error: "API_DISABLED" };
+  }
+
+  try {
+    const response = await axios.put(buildApiUrl(`/api/sessions/${sessionId}`), payload);
+    return { success: true, data: response?.data };
+  } catch (error) {
+    return {
+      success: false,
+      error: error?.response?.data?.message || error?.response?.status || "UPDATE_FAILED"
+    };
+  }
+}
+
+async function getSessionById(sessionId) {
+  if (!API_ENABLED) {
+    return null;
+  }
+
+  try {
+    const response = await axios.get(
+      buildApiUrl(`/api/sessions/${sessionId}`)
+    );
+
+    return response?.data || null;
+  } catch (error) {
+    console.error("Failed to fetch session:", error?.message);
+    return null;
+  }
+}
+
+async function updateSessionStatus(sessionId, status) {
+  if (!API_ENABLED) {
+    return { success: false, error: "API_DISABLED" };
+  }
+
+  try {
+    const response = await axios.put(
+      buildApiUrl(`/api/sessions/${sessionId}`),
+      { status }
+    );
+
+    return {
+      success: true,
+      data: response?.data
+    };
+  } catch (error) {
+    console.error("Failed to update session status:", error?.message);
+    return {
+      success: false,
+      error: error?.response?.status || "UPDATE_FAILED"
+    };
+  }
+}
+
+async function deleteSessionById(sessionId) {
+  if (!API_ENABLED) {
+    return { success: false, error: "API_DISABLED" };
+  }
+
+  const normalizedSessionId = String(sessionId || "").trim();
+  if (!normalizedSessionId) {
+    return { success: false, error: "SESSION_ID_MISSING" };
+  }
+
+  try {
+    await requestFirst("delete", [
+      `/api/sessions/${normalizedSessionId}`,
+      `/api/session/${normalizedSessionId}`,
+      `/api/sessions/delete/${normalizedSessionId}`
+    ]);
+    return { success: true };
+  } catch (error) {
+    const attemptedPaths = Array.isArray(error?.attemptedPaths) ? error.attemptedPaths : [];
+    const methodNotSupported = attemptedPaths.length > 0 && attemptedPaths.every((entry) => {
+      const status = Number(entry?.status);
+      return status === 404 || status === 405;
+    });
+
+    if (methodNotSupported) {
+      return {
+        success: false,
+        error: "Delete session endpoint is not available in backend API. Please implement DELETE /api/sessions/{id}."
+      };
+    }
+
+    const attemptedSummary = attemptedPaths
+      .map((entry) => `${entry.path}:${entry.status ?? "ERR"}`)
+      .join(", ");
+
+    console.error("Failed to delete session:", error?.message);
+    return {
+      success: false,
+      error:
+        error?.response?.data?.message ||
+        error?.response?.status ||
+        (attemptedSummary
+          ? `Unable to delete session. Backend delete route not reachable. Tried: ${attemptedSummary}`
+          : "Unable to delete session. Backend delete route not reachable.")
+    };
+  }
+}
+
+// ============== CHAT MESSAGES ==============
+
+async function sendChatMessage(sessionId, senderId, senderRole, message) {
+  if (!API_ENABLED) {
+    return { success: false, error: "API_DISABLED" };
+  }
+
+  try {
+    const payload = {
+      sessionId,
+      senderId,
+      senderRole: String(senderRole).toLowerCase(),
+      message: String(message || "").trim(),
+      timestamp: new Date().toISOString()
+    };
+
+    const response = await axios.post(
+      buildApiUrl(`/api/sessions/${sessionId}/messages`),
+      payload
+    );
+
+    return {
+      success: true,
+      messageId: response?.data?.data?.id || response?.data?.id || response?.data?.messageId,
+      data: response?.data
+    };
+  } catch (error) {
+    console.error("Failed to send chat message:", error?.message);
+    return {
+      success: false,
+      error: error?.response?.status || "SEND_FAILED"
+    };
+  }
+}
+
+async function getSessionMessages(sessionId) {
+  if (!API_ENABLED) {
+    return [];
+  }
+
+  try {
+    const response = await axios.get(
+      buildApiUrl(`/api/sessions/${sessionId}/messages`)
+    );
+
+    const messages = Array.isArray(response?.data)
+      ? response.data
+      : Array.isArray(response?.data?.messages)
+        ? response.data.messages
+        : [];
+
+    // Sort by timestamp
+    return messages.sort((a, b) => 
+      new Date(a.timestamp) - new Date(b.timestamp)
+    );
+  } catch (error) {
+    console.error("Failed to fetch messages:", error?.message);
+    return [];
+  }
+}
+
 export {
   ACTIVE_SESSIONS_STORAGE_KEY,
   LOGIN_EVENTS_STORAGE_KEY,
   SIGNUP_EVENTS_STORAGE_KEY,
   USERS_STORAGE_KEY,
+  authenticateWithGoogleToken,
   authenticateUser,
   clearActiveSession,
+  createSession,
   createUser,
+  deleteSessionById,
   deleteUserById,
   getActiveSessions,
   getAdminMetrics,
   getLoginEvents,
+  getSessionById,
+  getSessionMessages,
+  getSessionsByCounselor,
+  getSessionsByStudent,
   getSignupEvents,
+  getStudents,
   getUsers,
   getUsersByRole,
   normalizeRole,
   recordLoginEvent,
   recordSignupEvent,
+  saveQuestionnaireResponse,
   saveUsers,
+  sendChatMessage,
   setActiveSession,
+  updateSessionSchedule,
+  updateSessionStatus,
   updateUserById
 };

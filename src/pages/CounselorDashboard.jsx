@@ -1,262 +1,501 @@
-import { jsx, jsxs } from "react/jsx-runtime";
 import { useEffect, useState } from "react";
-import { useAuth } from "../Context/AuthContext";
+import { useAuth } from "../Context/AuthContext.jsx";
 import { Button } from "../components/button";
+import { Input } from "../components/input";
+import { Label } from "../components/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/tabs";
 import { Badge } from "../components/badge";
 import { CountUp } from "../components/count-up";
 import { useNavigate } from "react-router-dom";
-import {
-  CAREER_RESOURCES_STORAGE_KEY,
-  getCareerResources
-} from "../utils/careerResources";
-import {
-  GraduationCap,
-  Users,
-  BookOpen,
-  LogOut,
-  Calendar,
-  MessageSquare,
-  User,
-  Clock
-} from "lucide-react";
-function CounselorDashboard() {
-  const { user, logout } = useAuth();
+import CreateSessionDialog from "../components/CreateSessionDialog.jsx";
+import SessionChat from "../components/SessionChat.jsx";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../components/dialog";
+import { Calendar, GraduationCap, LogOut, User, Users } from "lucide-react";
+import { deleteSessionById, getStudents, getSessionsByCounselor } from "../utils/userManagement";
+
+function to12Hour(timeValue) {
+  const value = String(timeValue || "").trim();
+  if (!value) return "-";
+  const [hourPart = "0", minutePart = "00"] = value.split(":");
+  const hour = Number(hourPart);
+  const minute = Number(minutePart);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return value;
+  const suffix = hour >= 12 ? "PM" : "AM";
+  const normalizedHour = hour % 12 || 12;
+  return `${String(normalizedHour).padStart(2, "0")}:${String(minute).padStart(2, "0")} ${suffix}`;
+}
+
+function isWithinSessionWindow(session) {
+  const datePart = String(session?.date || "").slice(0, 10);
+  const startPart = String(session?.startTime || session?.time || "").slice(0, 5);
+  const endPart = String(session?.endTime || "").slice(0, 5);
+  if (!datePart || !startPart || !endPart) return true;
+  const start = new Date(`${datePart}T${startPart}:00`);
+  const end = new Date(`${datePart}T${endPart}:00`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return true;
+  const now = new Date();
+  return now >= start && now <= end;
+}
+
+function isSessionOver(session) {
+  const datePart = String(session?.date || "").slice(0, 10);
+  const endPart = String(session?.endTime || "").slice(0, 5);
+  if (!datePart || !endPart) return false;
+  const end = new Date(`${datePart}T${endPart}:00`);
+  if (Number.isNaN(end.getTime())) return false;
+  return new Date() > end;
+}
+
+function getSessionId(session) {
+  return session?.id || session?.sessionId || session?.session_id || session?.sessionID;
+}
+
+export default function CounselorDashboard() {
+  const { user, logout, updateProfile } = useAuth();
   const navigate = useNavigate();
-  const [careerResources, setCareerResources] = useState([]);
+  const [activeTab, setActiveTab] = useState("overview");
+  const [students, setStudents] = useState([]);
+  const [sessions, setSessions] = useState([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [selectedSessionForChat, setSelectedSessionForChat] = useState(null);
+  const [showCreateSessionDialog, setShowCreateSessionDialog] = useState(false);
+  const [selectedStudent, setSelectedStudent] = useState(null);
+  const [showProfileDialog, setShowProfileDialog] = useState(false);
+  const [showEditProfileDialog, setShowEditProfileDialog] = useState(false);
+  const [profileError, setProfileError] = useState("");
+  const [profileSuccess, setProfileSuccess] = useState("");
+  const [isSavingProfile, setIsSavingProfile] = useState(false);
+  const [profileForm, setProfileForm] = useState({
+    name: "",
+    email: "",
+    phone: "",
+    specialization: "",
+    institution: "",
+    experienceYears: "",
+    bio: ""
+  });
+
   const handleLogout = () => {
     logout();
     navigate("/login");
   };
-  const myStudents = [
-    { id: 1, name: "Emma Wilson", sessions: 5, nextSession: "2026-02-22", status: "active" },
-    { id: 2, name: "James Smith", sessions: 3, nextSession: "2026-02-23", status: "active" },
-    { id: 3, name: "Olivia Brown", sessions: 7, nextSession: "2026-02-25", status: "active" }
-  ];
-  const upcomingSessions = [
-    { id: 1, student: "Emma Wilson", date: "2026-02-22", time: "10:00 AM", topic: "Career Path Discussion" },
-    { id: 2, student: "James Smith", date: "2026-02-23", time: "2:00 PM", topic: "Resume Review" },
-    { id: 3, student: "Olivia Brown", date: "2026-02-25", time: "11:00 AM", topic: "Interview Preparation" }
-  ];
-  const sessionRequests = [
-    { id: 1, student: "Michael Johnson", requested: "2026-02-19", topic: "Career Change Advice" },
-    { id: 2, student: "Sarah Davis", requested: "2026-02-18", topic: "Skill Development" }
-  ];
+
+  const loadDashboardData = async () => {
+    if (!user?.id) return;
+    setIsLoading(true);
+    try {
+      const [studentsData, sessionsData] = await Promise.all([
+        getStudents(),
+        getSessionsByCounselor(user.id)
+      ]);
+      setStudents(studentsData || []);
+      setSessions(sessionsData || []);
+      setError("");
+    } catch (err) {
+      setError(err?.message || "Failed to load counselor data.");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   useEffect(() => {
-    setCareerResources(getCareerResources());
-    const handleStorageChange = (event) => {
-      if (event.key === CAREER_RESOURCES_STORAGE_KEY) {
-        setCareerResources(getCareerResources());
+    loadDashboardData();
+  }, [user?.id]);
+
+  useEffect(() => {
+    setProfileForm({
+      name: user?.name || "",
+      email: user?.email || "",
+      phone: user?.phone || "",
+      specialization: user?.specialization || "",
+      institution: user?.institution || "",
+      experienceYears:
+        user?.experienceYears === null || user?.experienceYears === undefined
+          ? ""
+          : String(user.experienceYears),
+      bio: user?.bio || ""
+    });
+  }, [user]);
+
+  const handleProfileInputChange = (key, value) => {
+    setProfileForm((previous) => ({
+      ...previous,
+      [key]: value
+    }));
+  };
+
+  const handleSaveProfile = async (event) => {
+    event.preventDefault();
+    setProfileError("");
+    setProfileSuccess("");
+
+    if (!profileForm.name.trim() || !profileForm.email.trim()) {
+      setProfileError("Name and email are required.");
+      return;
+    }
+
+    const parsedExperienceYears = profileForm.experienceYears.trim()
+      ? Number(profileForm.experienceYears)
+      : null;
+
+    if (profileForm.experienceYears.trim() && !Number.isFinite(parsedExperienceYears)) {
+      setProfileError("Experience years must be a number.");
+      return;
+    }
+
+    setIsSavingProfile(true);
+    try {
+      const result = await updateProfile({
+        name: profileForm.name.trim(),
+        email: profileForm.email.trim(),
+        phone: profileForm.phone.trim(),
+        specialization: profileForm.specialization.trim(),
+        institution: profileForm.institution.trim(),
+        experienceYears: parsedExperienceYears,
+        bio: profileForm.bio.trim()
+      });
+
+      if (!result?.success) {
+        setProfileError(result?.error || "Unable to save profile. Please try again.");
+        return;
       }
-    };
-    window.addEventListener("storage", handleStorageChange);
-    return () => window.removeEventListener("storage", handleStorageChange);
-  }, []);
-  return /* @__PURE__ */ jsxs("div", { className: "min-h-screen bg-gray-50", children: [
-    /* @__PURE__ */ jsx("header", { className: "bg-white border-b", children: /* @__PURE__ */ jsx("div", { className: "max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4", children: /* @__PURE__ */ jsxs("div", { className: "flex justify-between items-center", children: [
-      /* @__PURE__ */ jsxs("div", { className: "flex items-center gap-2", children: [
-        /* @__PURE__ */ jsx(GraduationCap, { className: "w-8 h-8 text-indigo-600" }),
-        /* @__PURE__ */ jsx("span", { className: "text-xl font-semibold", children: "Career Guidance Platform" })
-      ] }),
-      /* @__PURE__ */ jsxs("div", { className: "flex items-center gap-4", children: [
-        /* @__PURE__ */ jsxs("div", { className: "flex items-center gap-2", children: [
-          /* @__PURE__ */ jsx(User, { className: "w-4 h-4" }),
-          /* @__PURE__ */ jsx("span", { className: "text-sm", children: user?.name }),
-          /* @__PURE__ */ jsx(Badge, { variant: "outline", children: user?.role })
-        ] }),
-        /* @__PURE__ */ jsxs(Button, { variant: "outline", size: "sm", onClick: handleLogout, children: [
-          /* @__PURE__ */ jsx(LogOut, { className: "w-4 h-4 mr-2" }),
-          "Logout"
-        ] })
-      ] })
-    ] }) }) }),
-    /* @__PURE__ */ jsxs("main", { className: "max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8", children: [
-      /* @__PURE__ */ jsxs("div", { className: "mb-8", children: [
-        /* @__PURE__ */ jsxs("h1", { className: "text-3xl mb-2", children: [
-          "Welcome, Counselor ",
-          user?.name,
-          "!"
-        ] }),
-        /* @__PURE__ */ jsx("p", { className: "text-gray-600", children: "Manage your students and counseling sessions" })
-      ] }),
-      /* @__PURE__ */ jsxs(Tabs, { defaultValue: "overview", className: "space-y-6", children: [
-        /* @__PURE__ */ jsxs(TabsList, { children: [
-          /* @__PURE__ */ jsx(TabsTrigger, { value: "overview", children: "Overview" }),
-          /* @__PURE__ */ jsx(TabsTrigger, { value: "students", children: "My Students" }),
-          /* @__PURE__ */ jsx(TabsTrigger, { value: "sessions", children: "Sessions" }),
-          /* @__PURE__ */ jsx(TabsTrigger, { value: "requests", children: "Requests" }),
-          /* @__PURE__ */ jsx(TabsTrigger, { value: "resources", children: "Resources" })
-        ] }),
-        /* @__PURE__ */ jsxs(TabsContent, { value: "overview", className: "space-y-6", children: [
-          /* @__PURE__ */ jsxs("div", { className: "grid grid-cols-1 md:grid-cols-3 gap-6", children: [
-            /* @__PURE__ */ jsxs(Card, { children: [
-              /* @__PURE__ */ jsxs(CardHeader, { className: "flex flex-row items-center justify-between space-y-0 pb-2", children: [
-                /* @__PURE__ */ jsx(CardTitle, { className: "text-sm font-medium", children: "Active Students" }),
-                /* @__PURE__ */ jsx(Users, { className: "h-4 w-4 text-muted-foreground" })
-              ] }),
-              /* @__PURE__ */ jsxs(CardContent, { children: [
-                /* @__PURE__ */ jsx(CountUp, { end: myStudents.length, className: "text-2xl font-bold" }),
-                /* @__PURE__ */ jsx("p", { className: "text-xs text-muted-foreground", children: "Currently advising" })
-              ] })
-            ] }),
-            /* @__PURE__ */ jsxs(Card, { children: [
-              /* @__PURE__ */ jsxs(CardHeader, { className: "flex flex-row items-center justify-between space-y-0 pb-2", children: [
-                /* @__PURE__ */ jsx(CardTitle, { className: "text-sm font-medium", children: "Upcoming Sessions" }),
-                /* @__PURE__ */ jsx(Calendar, { className: "h-4 w-4 text-muted-foreground" })
-              ] }),
-              /* @__PURE__ */ jsxs(CardContent, { children: [
-                /* @__PURE__ */ jsx(CountUp, { end: upcomingSessions.length, className: "text-2xl font-bold" }),
-                /* @__PURE__ */ jsx("p", { className: "text-xs text-muted-foreground", children: "This week" })
-              ] })
-            ] }),
-            /* @__PURE__ */ jsxs(Card, { children: [
-              /* @__PURE__ */ jsxs(CardHeader, { className: "flex flex-row items-center justify-between space-y-0 pb-2", children: [
-                /* @__PURE__ */ jsx(CardTitle, { className: "text-sm font-medium", children: "Pending Requests" }),
-                /* @__PURE__ */ jsx(MessageSquare, { className: "h-4 w-4 text-muted-foreground" })
-              ] }),
-              /* @__PURE__ */ jsxs(CardContent, { children: [
-                /* @__PURE__ */ jsx(CountUp, { end: sessionRequests.length, className: "text-2xl font-bold" }),
-                /* @__PURE__ */ jsx("p", { className: "text-xs text-muted-foreground", children: "Awaiting response" })
-              ] })
-            ] })
-          ] }),
-          /* @__PURE__ */ jsxs("div", { className: "grid grid-cols-1 lg:grid-cols-2 gap-6", children: [
-            /* @__PURE__ */ jsxs(Card, { children: [
-              /* @__PURE__ */ jsxs(CardHeader, { children: [
-                /* @__PURE__ */ jsx(CardTitle, { children: "Today's Sessions" }),
-                /* @__PURE__ */ jsx(CardDescription, { children: "Your scheduled sessions for today" })
-              ] }),
-              /* @__PURE__ */ jsx(CardContent, { className: "space-y-4", children: upcomingSessions.slice(0, 2).map((session) => /* @__PURE__ */ jsxs("div", { className: "flex items-start gap-4 p-3 border rounded-lg", children: [
-                /* @__PURE__ */ jsx("div", { className: "p-2 bg-indigo-100 rounded", children: /* @__PURE__ */ jsx(Calendar, { className: "w-4 h-4 text-indigo-600" }) }),
-                /* @__PURE__ */ jsxs("div", { className: "flex-1", children: [
-                  /* @__PURE__ */ jsx("h4", { className: "font-medium", children: session.topic }),
-                  /* @__PURE__ */ jsx("p", { className: "text-sm text-gray-600", children: session.student }),
-                  /* @__PURE__ */ jsx("div", { className: "flex items-center gap-4 mt-2 text-xs text-gray-500", children: /* @__PURE__ */ jsxs("span", { className: "flex items-center gap-1", children: [
-                    /* @__PURE__ */ jsx(Clock, { className: "w-3 h-3" }),
-                    session.time
-                  ] }) })
-                ] })
-              ] }, session.id)) })
-            ] }),
-            /* @__PURE__ */ jsxs(Card, { children: [
-              /* @__PURE__ */ jsxs(CardHeader, { children: [
-                /* @__PURE__ */ jsx(CardTitle, { children: "Session Requests" }),
-                /* @__PURE__ */ jsx(CardDescription, { children: "Students requesting counseling sessions" })
-              ] }),
-              /* @__PURE__ */ jsx(CardContent, { className: "space-y-4", children: sessionRequests.map((request) => /* @__PURE__ */ jsxs("div", { className: "flex items-center justify-between p-3 border rounded-lg", children: [
-                /* @__PURE__ */ jsxs("div", { children: [
-                  /* @__PURE__ */ jsx("h4", { className: "font-medium", children: request.student }),
-                  /* @__PURE__ */ jsx("p", { className: "text-sm text-gray-600", children: request.topic }),
-                  /* @__PURE__ */ jsxs("p", { className: "text-xs text-gray-500 mt-1", children: [
-                    "Requested: ",
-                    request.requested
-                  ] })
-                ] }),
-                /* @__PURE__ */ jsx("div", { className: "flex gap-2", children: /* @__PURE__ */ jsx(Button, { size: "sm", children: "Accept" }) })
-              ] }, request.id)) })
-            ] })
-          ] })
-        ] }),
-        /* @__PURE__ */ jsx(TabsContent, { value: "students", className: "space-y-6", children: /* @__PURE__ */ jsxs(Card, { children: [
-          /* @__PURE__ */ jsxs(CardHeader, { children: [
-            /* @__PURE__ */ jsx(CardTitle, { children: "My Students" }),
-            /* @__PURE__ */ jsx(CardDescription, { children: "Students you are currently advising" })
-          ] }),
-          /* @__PURE__ */ jsx(CardContent, { className: "space-y-4", children: myStudents.map((student) => /* @__PURE__ */ jsxs("div", { className: "flex items-center justify-between p-4 border rounded-lg", children: [
-            /* @__PURE__ */ jsxs("div", { className: "flex items-center gap-4", children: [
-              /* @__PURE__ */ jsx("div", { className: "p-3 bg-purple-100 rounded-full", children: /* @__PURE__ */ jsx(User, { className: "w-5 h-5 text-purple-600" }) }),
-              /* @__PURE__ */ jsxs("div", { children: [
-                /* @__PURE__ */ jsx("h4", { className: "font-medium", children: student.name }),
-                /* @__PURE__ */ jsxs("div", { className: "flex items-center gap-3 mt-1 text-sm text-gray-600", children: [
-                  /* @__PURE__ */ jsxs("span", { children: [
-                    student.sessions,
-                    " sessions completed"
-                  ] }),
-                  /* @__PURE__ */ jsx("span", { children: "\u2022" }),
-                  /* @__PURE__ */ jsxs("span", { children: [
-                    "Next: ",
-                    student.nextSession
-                  ] })
-                ] })
-              ] })
-            ] }),
-            /* @__PURE__ */ jsxs("div", { className: "flex items-center gap-2", children: [
-              /* @__PURE__ */ jsx(Badge, { variant: "outline", className: "bg-green-50 text-green-700", children: student.status }),
-              /* @__PURE__ */ jsx(Button, { variant: "outline", size: "sm", children: "View Profile" })
-            ] })
-          ] }, student.id)) })
-        ] }) }),
-        /* @__PURE__ */ jsx(TabsContent, { value: "sessions", className: "space-y-6", children: /* @__PURE__ */ jsxs(Card, { children: [
-          /* @__PURE__ */ jsxs(CardHeader, { children: [
-            /* @__PURE__ */ jsx(CardTitle, { children: "All Sessions" }),
-            /* @__PURE__ */ jsx(CardDescription, { children: "Your upcoming counseling sessions" })
-          ] }),
-          /* @__PURE__ */ jsx(CardContent, { className: "space-y-4", children: upcomingSessions.map((session) => /* @__PURE__ */ jsxs("div", { className: "flex items-start justify-between p-4 border rounded-lg", children: [
-            /* @__PURE__ */ jsxs("div", { className: "flex items-start gap-4", children: [
-              /* @__PURE__ */ jsx("div", { className: "p-2 bg-indigo-100 rounded", children: /* @__PURE__ */ jsx(Calendar, { className: "w-5 h-5 text-indigo-600" }) }),
-              /* @__PURE__ */ jsxs("div", { children: [
-                /* @__PURE__ */ jsx("h4", { className: "font-medium", children: session.topic }),
-                /* @__PURE__ */ jsx("p", { className: "text-sm text-gray-600", children: session.student }),
-                /* @__PURE__ */ jsxs("div", { className: "flex items-center gap-4 mt-2 text-sm text-gray-500", children: [
-                  /* @__PURE__ */ jsx("span", { children: session.date }),
-                  /* @__PURE__ */ jsx("span", { children: session.time })
-                ] })
-              ] })
-            ] }),
-            /* @__PURE__ */ jsxs("div", { className: "flex gap-2", children: [
-              /* @__PURE__ */ jsx(Button, { variant: "outline", size: "sm", children: "Reschedule" }),
-              /* @__PURE__ */ jsx(Button, { size: "sm", children: "Start Session" })
-            ] })
-          ] }, session.id)) })
-        ] }) }),
-        /* @__PURE__ */ jsx(TabsContent, { value: "requests", className: "space-y-6", children: /* @__PURE__ */ jsxs(Card, { children: [
-          /* @__PURE__ */ jsxs(CardHeader, { children: [
-            /* @__PURE__ */ jsx(CardTitle, { children: "Session Requests" }),
-            /* @__PURE__ */ jsx(CardDescription, { children: "Review and respond to student session requests" })
-          ] }),
-          /* @__PURE__ */ jsx(CardContent, { className: "space-y-4", children: sessionRequests.map((request) => /* @__PURE__ */ jsxs("div", { className: "p-4 border rounded-lg", children: [
-            /* @__PURE__ */ jsxs("div", { className: "flex items-start justify-between mb-3", children: [
-              /* @__PURE__ */ jsxs("div", { children: [
-                /* @__PURE__ */ jsx("h4", { className: "font-medium text-lg", children: request.student }),
-                /* @__PURE__ */ jsx("p", { className: "text-sm text-gray-600 mt-1", children: request.topic }),
-                /* @__PURE__ */ jsxs("p", { className: "text-xs text-gray-500 mt-2", children: [
-                  "Requested on: ",
-                  request.requested
-                ] })
-              ] }),
-              /* @__PURE__ */ jsx(Badge, { children: "Pending" })
-            ] }),
-            /* @__PURE__ */ jsxs("div", { className: "flex gap-2", children: [
-              /* @__PURE__ */ jsx(Button, { size: "sm", children: "Accept & Schedule" }),
-              /* @__PURE__ */ jsx(Button, { size: "sm", variant: "outline", children: "Decline" }),
-              /* @__PURE__ */ jsx(Button, { size: "sm", variant: "outline", children: "Message Student" })
-            ] })
-          ] }, request.id)) })
-        ] }) }),
-        /* @__PURE__ */ jsx(TabsContent, { value: "resources", className: "space-y-6", children: /* @__PURE__ */ jsxs(Card, { children: [
-          /* @__PURE__ */ jsxs(CardHeader, { children: [
-            /* @__PURE__ */ jsx(CardTitle, { children: "Career Resources" }),
-            /* @__PURE__ */ jsx(CardDescription, { children: "Resources added by admin for student guidance" })
-          ] }),
-          /* @__PURE__ */ jsx(CardContent, { className: "space-y-4", children: careerResources.map((resource) => /* @__PURE__ */ jsxs("div", { className: "flex items-center justify-between p-4 border rounded-lg", children: [
-            /* @__PURE__ */ jsxs("div", { className: "flex items-center gap-4", children: [
-              /* @__PURE__ */ jsx("div", { className: "p-2 bg-blue-100 rounded", children: /* @__PURE__ */ jsx(BookOpen, { className: "w-5 h-5 text-blue-600" }) }),
-              /* @__PURE__ */ jsxs("div", { children: [
-                /* @__PURE__ */ jsx("h4", { className: "font-medium", children: resource.title }),
-                /* @__PURE__ */ jsxs("div", { className: "flex items-center gap-2 mt-1", children: [
-                  /* @__PURE__ */ jsx(Badge, { variant: "outline", className: "text-xs", children: resource.category }),
-                  /* @__PURE__ */ jsx("span", { className: "text-xs text-gray-500", children: resource.createdAt })
-                ] })
-              ] })
-            ] }),
-            /* @__PURE__ */ jsx(Button, { variant: "outline", size: "sm", children: "View" })
-          ] }, resource.id)) })
-        ] }) })
-      ] })
-    ] })
-  ] });
+
+      setProfileSuccess("Profile updated successfully.");
+    } finally {
+      setIsSavingProfile(false);
+    }
+  };
+
+  const scheduledSessions = sessions.filter((session) =>
+    ["scheduled", "accepted", "active"].includes(String(session.status).toLowerCase())
+  );
+
+  const handleStartSession = (session) => {
+    if (!isWithinSessionWindow(session)) {
+      setError(`Session chat can be started only between ${to12Hour(session.startTime || session.time)} and ${to12Hour(session.endTime)}.`);
+      return;
+    }
+
+    setSelectedSessionForChat({
+      ...session,
+      sessionName: session.topic,
+      sessionDate: String(session.date || "").slice(0, 10),
+      sessionTime: session.startTime || session.time,
+      sessionEndTime: session.endTime
+    });
+    setActiveTab("chat");
+  };
+
+  const handleViewChats = (session) => {
+    setSelectedSessionForChat({
+      ...session,
+      sessionName: session.topic,
+      sessionDate: String(session.date || "").slice(0, 10),
+      sessionTime: session.startTime || session.time,
+      sessionEndTime: session.endTime,
+      readOnly: true
+    });
+    setActiveTab("chat");
+  };
+
+  const handleDeleteSession = async (sessionId) => {
+    const confirmed = window.confirm("Are you sure you want to delete this session?");
+    if (!confirmed) return;
+
+    const result = await deleteSessionById(sessionId);
+    if (!result.success) {
+      setError(result.error || "Failed to delete session.");
+      return;
+    }
+
+    if (selectedSessionForChat?.id === sessionId) {
+      setSelectedSessionForChat(null);
+      setActiveTab("sessions");
+    }
+
+    await loadDashboardData();
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      <header className="bg-white border-b">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+          <div className="flex justify-between items-center">
+            <div className="flex items-center gap-2">
+              <GraduationCap className="w-8 h-8 text-indigo-600" />
+              <span className="text-xl font-semibold">Career Guidance Platform</span>
+            </div>
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-2">
+                <User className="w-4 h-4" />
+                <span className="text-sm">{user?.name}</span>
+                <Badge variant="outline">{user?.role}</Badge>
+              </div>
+              <Button variant="outline" size="sm" onClick={handleLogout}>
+                <LogOut className="w-4 h-4 mr-2" />
+                Logout
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => setShowEditProfileDialog(true)}>
+                Edit Profile
+              </Button>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <div className="mb-8">
+          <h1 className="text-3xl mb-2">Welcome, Counselor {user?.name}!</h1>
+          <p className="text-gray-600">Manage your students and counseling sessions</p>
+        </div>
+
+        {error && <p className="mb-4 text-sm text-red-600">{error}</p>}
+
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
+          <TabsList>
+            <TabsTrigger value="overview">Overview</TabsTrigger>
+            <TabsTrigger value="students">My Students</TabsTrigger>
+            <TabsTrigger value="sessions">Sessions</TabsTrigger>
+            {selectedSessionForChat && <TabsTrigger value="chat">Chat</TabsTrigger>}
+          </TabsList>
+
+          <TabsContent value="overview" className="space-y-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <Card>
+                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                  <CardTitle className="text-sm font-medium">Active Students</CardTitle>
+                  <Users className="h-4 w-4 text-muted-foreground" />
+                </CardHeader>
+                <CardContent>
+                  <CountUp end={students.length} className="text-2xl font-bold" />
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                  <CardTitle className="text-sm font-medium">Scheduled Sessions</CardTitle>
+                  <Calendar className="h-4 w-4 text-muted-foreground" />
+                </CardHeader>
+                <CardContent>
+                  <CountUp end={scheduledSessions.length} className="text-2xl font-bold" />
+                </CardContent>
+              </Card>
+            </div>
+          </TabsContent>
+
+          <TabsContent value="students" className="space-y-6">
+            <Card>
+              <CardHeader>
+                <CardTitle>My Students</CardTitle>
+                <CardDescription>Students available for counseling</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {isLoading && <p className="text-sm text-gray-500">Loading students...</p>}
+                {!isLoading && students.length === 0 && <p className="text-sm text-gray-500">No students found.</p>}
+                {students.map((student) => (
+                  <div key={student.id} className="flex items-center justify-between p-4 border rounded-lg">
+                    <div>
+                      <h4 className="font-medium">{student.name}</h4>
+                      <p className="text-sm text-gray-600">{student.email}</p>
+                    </div>
+                    <Button variant="outline" size="sm" onClick={() => {
+                      setSelectedStudent(student);
+                      setShowProfileDialog(true);
+                    }}>
+                      View Profile
+                    </Button>
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="sessions" className="space-y-6">
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0">
+                <div>
+                  <CardTitle>All Sessions</CardTitle>
+                  <CardDescription>Scheduled sessions with start and end times</CardDescription>
+                </div>
+                <Button onClick={() => setShowCreateSessionDialog(true)}>Create Session</Button>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {scheduledSessions.length === 0 && <p className="text-sm text-gray-500">No scheduled sessions available.</p>}
+                {scheduledSessions.map((session) => (
+                  <div key={getSessionId(session)} className="flex items-start justify-between p-4 border rounded-lg">
+                    <div>
+                      <h4 className="font-medium">{session.topic}</h4>
+                      <p className="text-sm text-gray-600">{session.studentName || session.student || "Student"}</p>
+                      <div className="flex items-center gap-4 mt-2 text-sm text-gray-500">
+                        <span>{String(session.date || "").slice(0, 10)}</span>
+                        <span>{to12Hour(session.startTime || session.time)} - {to12Hour(session.endTime)}</span>
+                      </div>
+                      {isSessionOver(session) && <p className="mt-2 text-xs text-amber-700">session is over</p>}
+                    </div>
+                    <div className="flex gap-2">
+                      {isSessionOver(session) ? (
+                        <Button size="sm" variant="outline" onClick={() => handleViewChats(session)}>
+                          View Chats
+                        </Button>
+                      ) : (
+                        <Button size="sm" onClick={() => handleStartSession(session)}>
+                          Start Session
+                        </Button>
+                      )}
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="text-red-600 border-red-200 hover:bg-red-50"
+                        onClick={() => handleDeleteSession(getSessionId(session))}
+                      >
+                        Delete
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="chat" className="space-y-6">
+            {selectedSessionForChat ? (
+              <SessionChat
+                session={selectedSessionForChat}
+                currentUser={user}
+                embedded
+                readOnly={Boolean(selectedSessionForChat?.readOnly)}
+                onClose={() => {
+                  setSelectedSessionForChat(null);
+                  setActiveTab("sessions");
+                }}
+              />
+            ) : (
+              <Card>
+                <CardHeader>
+                  <CardTitle>No Active Session</CardTitle>
+                </CardHeader>
+              </Card>
+            )}
+          </TabsContent>
+        </Tabs>
+
+        <Dialog open={showProfileDialog} onOpenChange={setShowProfileDialog}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>{selectedStudent?.name || "Student Profile"}</DialogTitle>
+              <DialogDescription>{selectedStudent?.email || ""}</DialogDescription>
+            </DialogHeader>
+            <div className="text-sm space-y-2">
+              <p><span className="font-medium">Role:</span> {selectedStudent?.role || "student"}</p>
+              <p><span className="font-medium">Status:</span> {selectedStudent?.status || "active"}</p>
+            </div>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog open={showEditProfileDialog} onOpenChange={setShowEditProfileDialog}>
+          <DialogContent className="max-w-lg">
+            <DialogHeader>
+              <DialogTitle>Edit Counselor Profile</DialogTitle>
+              <DialogDescription>Update your profile details. Changes are saved to database.</DialogDescription>
+            </DialogHeader>
+            <form className="space-y-4" onSubmit={handleSaveProfile}>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="counselor-name">Name</Label>
+                  <Input
+                    id="counselor-name"
+                    value={profileForm.name}
+                    onChange={(event) => handleProfileInputChange("name", event.target.value)}
+                    required
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="counselor-email">Email</Label>
+                  <Input
+                    id="counselor-email"
+                    type="email"
+                    value={profileForm.email}
+                    onChange={(event) => handleProfileInputChange("email", event.target.value)}
+                    required
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="counselor-phone">Phone</Label>
+                  <Input
+                    id="counselor-phone"
+                    value={profileForm.phone}
+                    onChange={(event) => handleProfileInputChange("phone", event.target.value)}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="counselor-years">Experience (years)</Label>
+                  <Input
+                    id="counselor-years"
+                    value={profileForm.experienceYears}
+                    onChange={(event) => handleProfileInputChange("experienceYears", event.target.value)}
+                    placeholder="Example: 5"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="counselor-specialization">Specialization</Label>
+                  <Input
+                    id="counselor-specialization"
+                    value={profileForm.specialization}
+                    onChange={(event) => handleProfileInputChange("specialization", event.target.value)}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="counselor-institution">Institution</Label>
+                  <Input
+                    id="counselor-institution"
+                    value={profileForm.institution}
+                    onChange={(event) => handleProfileInputChange("institution", event.target.value)}
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="counselor-bio">Bio</Label>
+                <textarea
+                  id="counselor-bio"
+                  className="w-full min-h-24 rounded-md border border-input bg-background px-3 py-2 text-sm"
+                  value={profileForm.bio}
+                  onChange={(event) => handleProfileInputChange("bio", event.target.value)}
+                  placeholder="Share your experience and counseling focus"
+                />
+              </div>
+
+              {profileError && <p className="text-sm text-red-600">{profileError}</p>}
+              {profileSuccess && <p className="text-sm text-green-600">{profileSuccess}</p>}
+
+              <div className="flex justify-end gap-2">
+                <Button type="button" variant="outline" onClick={() => setShowEditProfileDialog(false)}>
+                  Close
+                </Button>
+                <Button type="submit" disabled={isSavingProfile}>
+                  {isSavingProfile ? "Saving..." : "Save Changes"}
+                </Button>
+              </div>
+            </form>
+          </DialogContent>
+        </Dialog>
+
+        <CreateSessionDialog
+          isOpen={showCreateSessionDialog}
+          onClose={() => setShowCreateSessionDialog(false)}
+          counselorId={user?.id}
+          students={students}
+          onSessionCreated={loadDashboardData}
+        />
+      </main>
+    </div>
+  );
 }
-export {
-  CounselorDashboard as default
-};

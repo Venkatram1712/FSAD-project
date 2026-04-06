@@ -14,7 +14,7 @@ import {
   User,
   Users
 } from "lucide-react";
-import { useAuth } from "../Context/AuthContext";
+import { useAuth } from "../Context/AuthContext.jsx";
 import { Badge } from "../components/badge";
 import { Button } from "../components/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/card";
@@ -24,10 +24,18 @@ import { Input } from "../components/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/tabs";
 import { Textarea } from "../components/textarea";
 import {
-  CAREER_RESOURCES_STORAGE_KEY,
+  createCareerPath,
   createCareerResource,
+  createResourceContent,
+  deleteCareerPath,
+  deleteCareerResource,
+  deleteResourceContent,
+  getCareerPaths,
   getCareerResources,
-  saveCareerResources
+  getResourceContents,
+  updateCareerPath,
+  updateCareerResource,
+  updateResourceContent
 } from "../utils/careerResources";
 import {
   createUser,
@@ -83,17 +91,14 @@ export default function AdminDashboard() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
 
-  const [careerResources, setCareerResources] = useState(() => getCareerResources());
+  const [careerResources, setCareerResources] = useState([]);
   const [resourceTitle, setResourceTitle] = useState("");
   const [resourceCategory, setResourceCategory] = useState("");
   const [resourceError, setResourceError] = useState("");
   const [editingResourceId, setEditingResourceId] = useState(null);
   const [editTitle, setEditTitle] = useState("");
   const [editCategory, setEditCategory] = useState("");
-  const [resourceContents, setResourceContents] = useState(() => {
-    const stored = localStorage.getItem("RESOURCE_CONTENTS");
-    return stored ? JSON.parse(stored) : {};
-  });
+  const [resourceContents, setResourceContents] = useState({});
   const [selectedResourceForContent, setSelectedResourceForContent] = useState(null);
   const [showContentDialog, setShowContentDialog] = useState(false);
   const [contentType, setContentType] = useState("text");
@@ -101,6 +106,11 @@ export default function AdminDashboard() {
   const [contentUrl, setContentUrl] = useState("");
   const [contentText, setContentText] = useState("");
   const [editingContentId, setEditingContentId] = useState(null);
+  const [careerPaths, setCareerPaths] = useState([]);
+  const [careerPathTitle, setCareerPathTitle] = useState("");
+  const [careerPathCategory, setCareerPathCategory] = useState("");
+  const [careerPathSummary, setCareerPathSummary] = useState("");
+  const [editingCareerPathId, setEditingCareerPathId] = useState(null);
 
   const [allUsers, setAllUsers] = useState([]);
   const [metrics, setMetrics] = useState({
@@ -150,8 +160,14 @@ export default function AdminDashboard() {
 
   const refreshDashboardData = async () => {
     try {
-      setCareerResources(getCareerResources());
-      const [usersFromApi, metricsSnapshot] = await Promise.all([getUsers(), getAdminMetrics()]);
+      const [resources, paths, usersFromApi, metricsSnapshot] = await Promise.all([
+        getCareerResources(),
+        getCareerPaths(),
+        getUsers(),
+        getAdminMetrics()
+      ]);
+      setCareerResources(resources || []);
+      setCareerPaths(paths || []);
       setAllUsers(usersFromApi);
       setMetrics(metricsSnapshot);
       setActivityFeed(buildActivityFeed());
@@ -179,27 +195,21 @@ export default function AdminDashboard() {
 
   useEffect(() => {
     refreshDashboardData();
-
-    const handleStorageChange = (event) => {
-      if (event.key === CAREER_RESOURCES_STORAGE_KEY) {
-        refreshDashboardData();
-      }
-    };
-
-    window.addEventListener("storage", handleStorageChange);
-    return () => window.removeEventListener("storage", handleStorageChange);
   }, []);
 
-  const handleAddResource = () => {
+  const handleAddResource = async () => {
     if (!resourceTitle.trim() || !resourceCategory.trim()) {
       setResourceError("Please enter both title and category");
       return;
     }
 
-    const created = createCareerResource(resourceTitle, resourceCategory);
-    const updatedResources = [created, ...careerResources];
-    saveCareerResources(updatedResources);
-    setCareerResources(updatedResources);
+    try {
+      await createCareerResource(resourceTitle, resourceCategory);
+      await refreshDashboardData();
+    } catch (error) {
+      setResourceError("Failed to add resource in database");
+      return;
+    }
 
     setResourceTitle("");
     setResourceCategory("");
@@ -213,7 +223,7 @@ export default function AdminDashboard() {
     setResourceError("");
   };
 
-  const handleSaveResourceEdit = () => {
+  const handleSaveResourceEdit = async () => {
     if (!editingResourceId) {
       return;
     }
@@ -223,18 +233,16 @@ export default function AdminDashboard() {
       return;
     }
 
-    const updatedResources = careerResources.map((resource) =>
-      resource.id === editingResourceId
-        ? {
-            ...resource,
-            title: editTitle.trim(),
-            category: editCategory.trim()
-          }
-        : resource
-    );
-
-    saveCareerResources(updatedResources);
-    setCareerResources(updatedResources);
+    try {
+      await updateCareerResource(editingResourceId, {
+        title: editTitle.trim(),
+        category: editCategory.trim()
+      });
+      await refreshDashboardData();
+    } catch (error) {
+      setResourceError("Failed to update resource in database");
+      return;
+    }
     setEditingResourceId(null);
     setEditTitle("");
     setEditCategory("");
@@ -248,10 +256,14 @@ export default function AdminDashboard() {
     setResourceError("");
   };
 
-  const handleDeleteResource = (resourceId) => {
-    const updatedResources = careerResources.filter((resource) => resource.id !== resourceId);
-    saveCareerResources(updatedResources);
-    setCareerResources(updatedResources);
+  const handleDeleteResource = async (resourceId) => {
+    try {
+      await deleteCareerResource(resourceId);
+      await refreshDashboardData();
+    } catch (error) {
+      setResourceError("Failed to delete resource from database");
+      return;
+    }
 
     if (editingResourceId === resourceId) {
       handleCancelResourceEdit();
@@ -259,11 +271,15 @@ export default function AdminDashboard() {
   };
 
   const saveResourceContents = (updatedContents) => {
-    localStorage.setItem("RESOURCE_CONTENTS", JSON.stringify(updatedContents));
     setResourceContents(updatedContents);
   };
 
-  const handleAddContent = () => {
+  const reloadContentsForResource = async (resourceId) => {
+    const contents = await getResourceContents(resourceId);
+    setResourceContents((prev) => ({ ...prev, [resourceId]: contents || [] }));
+  };
+
+  const handleAddContent = async () => {
     if (!selectedResourceForContent || !contentTitle.trim()) {
       setResourceError("Please enter content title");
       return;
@@ -281,7 +297,6 @@ export default function AdminDashboard() {
 
     const resourceId = selectedResourceForContent.id;
     const newContent = {
-      id: Date.now().toString(),
       type: contentType,
       title: contentTitle.trim(),
       url: contentType === "video" ? contentUrl.trim() : null,
@@ -289,12 +304,13 @@ export default function AdminDashboard() {
       createdAt: new Date().toISOString()
     };
 
-    const updatedContents = {
-      ...resourceContents,
-      [resourceId]: [...(resourceContents[resourceId] || []), newContent]
-    };
-
-    saveResourceContents(updatedContents);
+    try {
+      await createResourceContent(resourceId, newContent);
+      await reloadContentsForResource(resourceId);
+    } catch (error) {
+      setResourceError("Failed to add content in database");
+      return;
+    }
     setContentTitle("");
     setContentUrl("");
     setContentText("");
@@ -321,7 +337,7 @@ export default function AdminDashboard() {
     setResourceError("");
   };
 
-  const handleUpdateContent = () => {
+  const handleUpdateContent = async () => {
     if (!selectedResourceForContent || !editingContentId || !contentTitle.trim()) {
       setResourceError("Please enter content title");
       return;
@@ -338,32 +354,31 @@ export default function AdminDashboard() {
     }
 
     const resourceId = selectedResourceForContent.id;
-    const updatedContents = {
-      ...resourceContents,
-      [resourceId]: (resourceContents[resourceId] || []).map((item) =>
-        item.id === editingContentId
-          ? {
-              ...item,
-              type: contentType,
-              title: contentTitle.trim(),
-              url: contentType === "video" ? contentUrl.trim() : null,
-              text: contentType === "text" ? contentText.trim() : null,
-              updatedAt: new Date().toISOString()
-            }
-          : item
-      )
-    };
-
-    saveResourceContents(updatedContents);
+    try {
+      const payload = {
+        type: contentType,
+        title: contentTitle.trim(),
+        url: contentType === "video" ? contentUrl.trim() : null,
+        text: contentType === "text" ? contentText.trim() : null,
+        updatedAt: new Date().toISOString()
+      };
+      await updateResourceContent(resourceId, editingContentId, payload);
+      await reloadContentsForResource(resourceId);
+    } catch (error) {
+      setResourceError("Failed to update content in database");
+      return;
+    }
     handleCancelEditContent();
   };
 
-  const handleDeleteContent = (resourceId, contentId) => {
-    const updatedContents = {
-      ...resourceContents,
-      [resourceId]: (resourceContents[resourceId] || []).filter((item) => item.id !== contentId)
-    };
-    saveResourceContents(updatedContents);
+  const handleDeleteContent = async (resourceId, contentId) => {
+    try {
+      await deleteResourceContent(resourceId, contentId);
+      await reloadContentsForResource(resourceId);
+    } catch (error) {
+      setResourceError("Failed to delete content from database");
+      return;
+    }
 
     if (editingContentId === contentId) {
       handleCancelEditContent();
@@ -372,8 +387,75 @@ export default function AdminDashboard() {
 
   const handleOpenContentDialog = (resource) => {
     setSelectedResourceForContent(resource);
-    setShowContentDialog(true);
+    setContentTitle("");
+    setContentUrl("");
+    setContentText("");
+    setContentType("text");
+    setEditingContentId(null);
+    (async () => {
+      try {
+        await reloadContentsForResource(resource.id);
+      } catch (error) {
+        setResourceContents((prev) => ({ ...prev, [resource.id]: [] }));
+      }
+      setShowContentDialog(true);
+    })();
     setResourceError("");
+  };
+
+  const handleAddCareerPath = async () => {
+    if (!careerPathTitle.trim() || !careerPathCategory.trim()) {
+      setResourceError("Career path title and category are required");
+      return;
+    }
+
+    try {
+      await createCareerPath({
+        title: careerPathTitle.trim(),
+        category: careerPathCategory.trim(),
+        summary: careerPathSummary.trim()
+      });
+      setCareerPathTitle("");
+      setCareerPathCategory("");
+      setCareerPathSummary("");
+      await refreshDashboardData();
+    } catch (error) {
+      setResourceError("Failed to add career path in database");
+    }
+  };
+
+  const handleStartEditCareerPath = (path) => {
+    setEditingCareerPathId(path.id);
+    setCareerPathTitle(path.title || "");
+    setCareerPathCategory(path.category || "");
+    setCareerPathSummary(path.summary || "");
+  };
+
+  const handleSaveCareerPathEdit = async () => {
+    if (!editingCareerPathId) return;
+    try {
+      await updateCareerPath(editingCareerPathId, {
+        title: careerPathTitle.trim(),
+        category: careerPathCategory.trim(),
+        summary: careerPathSummary.trim()
+      });
+      setEditingCareerPathId(null);
+      setCareerPathTitle("");
+      setCareerPathCategory("");
+      setCareerPathSummary("");
+      await refreshDashboardData();
+    } catch (error) {
+      setResourceError("Failed to update career path in database");
+    }
+  };
+
+  const handleDeleteCareerPath = async (pathId) => {
+    try {
+      await deleteCareerPath(pathId);
+      await refreshDashboardData();
+    } catch (error) {
+      setResourceError("Failed to delete career path from database");
+    }
   };
 
   const handleAddUser = async () => {
@@ -444,7 +526,7 @@ export default function AdminDashboard() {
       status: "active",
       specialization: ""
     });
-    refreshDashboardData();
+    await refreshDashboardData();
   };
 
   const startUserEdit = (selectedUser) => {
@@ -498,19 +580,25 @@ export default function AdminDashboard() {
   };
 
   const handleDeleteUser = async (userId) => {
-    const result = await deleteUserById(userId);
-    if (!result.success) {
-      setManagementError("Failed to delete this user.");
-      return;
-    }
+    try {
+      const result = await deleteUserById(userId);
+      if (!result.success) {
+        setManagementError("Failed to delete this user.");
+        return;
+      }
 
-    if (user?.id === userId) {
-      handleLogout();
-      return;
-    }
+      if (user?.id === userId) {
+        handleLogout();
+        return;
+      }
 
-    setManagementError("");
-    await refreshDashboardData();
+      // Optimistically update table so deletion is visible immediately.
+      setAllUsers((prevUsers) => prevUsers.filter((candidate) => candidate.id !== userId));
+      setManagementError("");
+      await refreshDashboardData();
+    } catch (error) {
+      setManagementError(error?.message || "Failed to delete this user.");
+    }
   };
 
   return (
@@ -1064,6 +1152,54 @@ export default function AdminDashboard() {
 
             <Card>
               <CardHeader>
+                <CardTitle>Career Paths</CardTitle>
+                <CardDescription>Create and manage editable career paths from admin portal</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  <Input
+                    placeholder="Career Path Title"
+                    value={careerPathTitle}
+                    onChange={(e) => setCareerPathTitle(e.target.value)}
+                  />
+                  <Input
+                    placeholder="Category"
+                    value={careerPathCategory}
+                    onChange={(e) => setCareerPathCategory(e.target.value)}
+                  />
+                  <Button onClick={editingCareerPathId ? handleSaveCareerPathEdit : handleAddCareerPath}>
+                    {editingCareerPathId ? "Save Career Path" : "Add Career Path"}
+                  </Button>
+                </div>
+                <Textarea
+                  placeholder="Career path summary"
+                  value={careerPathSummary}
+                  onChange={(e) => setCareerPathSummary(e.target.value)}
+                />
+
+                <div className="space-y-2">
+                  {careerPaths.length === 0 ? (
+                    <p className="text-sm text-gray-500">No career paths found in database.</p>
+                  ) : (
+                    careerPaths.map((path) => (
+                      <div key={path.id} className="flex items-center justify-between p-3 border rounded-lg bg-gray-50">
+                        <div>
+                          <p className="font-medium text-sm">{path.title}</p>
+                          <p className="text-xs text-gray-600 mt-1">{path.category} • {path.summary || "No summary"}</p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Button variant="outline" size="sm" onClick={() => handleStartEditCareerPath(path)}>Edit</Button>
+                          <Button variant="outline" size="sm" onClick={() => handleDeleteCareerPath(path.id)} className="text-red-600">Delete</Button>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
                 <CardTitle>Top Resources</CardTitle>
                 <CardDescription>Most viewed career resources</CardDescription>
               </CardHeader>
@@ -1200,15 +1336,20 @@ export default function AdminDashboard() {
                                       </div>
                                     )}
 
-                                    <Button onClick={editingContentId ? handleUpdateContent : handleAddContent} className="w-full">
+                                    <Button onClick={handleAddContent} className="w-full">
                                       <Plus className="w-4 h-4 mr-2" />
-                                      {editingContentId ? "Update Content" : "Add Content"}
+                                      Add Content
                                     </Button>
 
                                     {editingContentId && (
-                                      <Button variant="outline" onClick={handleCancelEditContent} className="w-full">
-                                        Cancel Edit
-                                      </Button>
+                                      <>
+                                        <Button variant="secondary" onClick={handleUpdateContent} className="w-full">
+                                          Update Selected Content
+                                        </Button>
+                                        <Button variant="outline" onClick={handleCancelEditContent} className="w-full">
+                                          Cancel Edit
+                                        </Button>
+                                      </>
                                     )}
                                   </div>
 

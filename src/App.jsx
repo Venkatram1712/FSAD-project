@@ -1,11 +1,11 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { AuthProvider } from './Context/AuthContext';
+import { AuthProvider } from './Context/AuthContext.jsx';
 import LandingPage from './pages/LandingPage';
 import LoginPage from './pages/LoginPage';
 import SignupPage from './pages/SignupPage';
 import CareerQuestionnaire from './pages/CareerQuestionnaire';
 import StudentDashboard from './pages/StudentDashboard';
-import CounselorDashboard from './pages/CounselorDashboard';
+import CounselorDashboard from './pages/CounselorDashboard.jsx';
 import AdminDashboard from './pages/AdminDashboard';
 import ProtectedRoute from './components/ProtectedRoute';
 
