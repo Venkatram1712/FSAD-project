@@ -762,13 +762,15 @@ async function sendChatMessage(sessionId, senderId, senderRole, message) {
   }
 
   try {
+    const now = new Date();
+    const localDateTime = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}T${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}:${String(now.getSeconds()).padStart(2, "0")}`;
     const messageText = String(message || "").trim();
     const senderRoleValue = String(senderRole || "").trim();
     const senderRoleUpper = senderRoleValue.toUpperCase();
     const senderRoleLower = senderRoleValue.toLowerCase();
     const senderIdValue = String(senderId || "").trim();
     const senderIdAsNumber = Number(senderIdValue);
-    const normalizedTimestamp = new Date().toISOString();
+    const normalizedTimestamp = localDateTime;
 
     const endpointCandidates = [
       `/api/sessions/${normalizedSessionId}/messages`,
