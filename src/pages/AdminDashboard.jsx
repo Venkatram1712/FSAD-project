@@ -803,7 +803,6 @@ export default function AdminDashboard() {
                         <th className="text-left py-2">Email</th>
                         <th className="text-left py-2">Role</th>
                         <th className="text-left py-2">Status</th>
-                        <th className="text-left py-2">Created</th>
                         <th className="text-left py-2">Actions</th>
                       </tr>
                     </thead>
@@ -860,7 +859,6 @@ export default function AdminDashboard() {
                               </Badge>
                             )}
                           </td>
-                          <td className="py-2">{formatDate(listedUser.createdAt)}</td>
                           <td className="py-2">
                             <div className="flex gap-2">
                               {editingUserId === listedUser.id ? (
@@ -897,7 +895,7 @@ export default function AdminDashboard() {
                       ))}
                       {users.length === 0 && (
                         <tr>
-                          <td className="py-4 text-gray-500" colSpan={6}>
+                          <td className="py-4 text-gray-500" colSpan={5}>
                             No users found.
                           </td>
                         </tr>
@@ -991,7 +989,6 @@ export default function AdminDashboard() {
                         <th className="text-left py-2">Email</th>
                         <th className="text-left py-2">Specialization</th>
                         <th className="text-left py-2">Status</th>
-                        <th className="text-left py-2">Created</th>
                         <th className="text-left py-2">Actions</th>
                       </tr>
                     </thead>
@@ -1065,7 +1062,6 @@ export default function AdminDashboard() {
                               </Badge>
                             )}
                           </td>
-                          <td className="py-2">{formatDate(counselor.createdAt)}</td>
                           <td className="py-2">
                             <div className="flex gap-2">
                               {editingCounselorId === counselor.id ? (
@@ -1106,7 +1102,7 @@ export default function AdminDashboard() {
                       ))}
                       {counselors.length === 0 && (
                         <tr>
-                          <td className="py-4 text-gray-500" colSpan={6}>
+                          <td className="py-4 text-gray-500" colSpan={5}>
                             No counselors found.
                           </td>
                         </tr>
