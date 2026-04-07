@@ -183,8 +183,7 @@ async function requestFirst(method, paths, data) {
 
   const requestError = new Error(
     `API request failed (${String(method || "get").toUpperCase()}). ` +
-      `Checked endpoints at ${API_BASE_URL || "(dev proxy /api)"}: ${attempted || "none"}. ` +
-      "Set VITE_USERS_ENDPOINTS in frontend env to your backend users endpoint."
+      `Checked endpoints at ${API_BASE_URL || "(dev proxy /api)"}: ${attempted || "none"}.`
   );
   requestError.attemptedPaths = requestErrors;
   throw requestError;
@@ -763,13 +762,13 @@ async function sendChatMessage(sessionId, senderId, senderRole, message) {
   }
 
   try {
-    const payload = {
-      sessionId: normalizedSessionId,
-      senderId,
-      senderRole: String(senderRole).toLowerCase(),
-      message: String(message || "").trim(),
-      timestamp: new Date().toISOString()
-    };
+    const messageText = String(message || "").trim();
+    const senderRoleValue = String(senderRole || "").trim();
+    const senderRoleUpper = senderRoleValue.toUpperCase();
+    const senderRoleLower = senderRoleValue.toLowerCase();
+    const senderIdValue = String(senderId || "").trim();
+    const senderIdAsNumber = Number(senderIdValue);
+    const normalizedTimestamp = new Date().toISOString();
 
     const endpointCandidates = [
       `/api/sessions/${normalizedSessionId}/messages`,
@@ -777,7 +776,68 @@ async function sendChatMessage(sessionId, senderId, senderRole, message) {
       `/api/messages/session/${normalizedSessionId}`
     ];
 
-    const responseData = await requestFirst("post", endpointCandidates, payload);
+    const payloadCandidates = [
+      {
+        sessionId: normalizedSessionId,
+        senderId,
+        senderRole: senderRoleLower,
+        message: messageText,
+        timestamp: normalizedTimestamp
+      },
+      {
+        sessionId: normalizedSessionId,
+        senderId: Number.isFinite(senderIdAsNumber) ? senderIdAsNumber : senderIdValue,
+        senderRole: senderRoleUpper,
+        message: messageText,
+        sentAt: normalizedTimestamp
+      },
+      {
+        sessionId: normalizedSessionId,
+        userId: Number.isFinite(senderIdAsNumber) ? senderIdAsNumber : senderIdValue,
+        role: senderRoleUpper,
+        content: messageText,
+        createdAt: normalizedTimestamp
+      }
+    ];
+
+    const requestErrors = [];
+    let responseData = null;
+
+    for (const path of endpointCandidates) {
+      for (const payload of payloadCandidates) {
+        try {
+          const response = await axios.post(buildApiUrl(path), payload, { timeout: 10000 });
+          responseData = response?.data ?? null;
+          break;
+        } catch (error) {
+          requestErrors.push({
+            path,
+            status: error?.response?.status || null,
+            message: error?.response?.data?.message || error?.response?.data?.error || error?.message || "REQUEST_FAILED"
+          });
+        }
+      }
+
+      if (responseData !== null) {
+        break;
+      }
+    }
+
+    if (responseData === null) {
+      const attemptedSummary = requestErrors
+        .map((entry) => `${entry.path}:${entry.status ?? "ERR"}`)
+        .join(", ");
+      const firstMessage = requestErrors.find((entry) => entry.message)?.message;
+
+      return {
+        success: false,
+        error:
+          firstMessage ||
+          (attemptedSummary
+            ? `Unable to send message. Tried: ${attemptedSummary}`
+            : "SEND_FAILED")
+      };
+    }
 
     return {
       success: true,
