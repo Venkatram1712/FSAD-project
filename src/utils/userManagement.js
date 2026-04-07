@@ -757,30 +757,50 @@ async function sendChatMessage(sessionId, senderId, senderRole, message) {
     return { success: false, error: "API_DISABLED" };
   }
 
+  const normalizedSessionId = String(sessionId || "").trim();
+  if (!normalizedSessionId) {
+    return { success: false, error: "SESSION_ID_MISSING" };
+  }
+
   try {
     const payload = {
-      sessionId,
+      sessionId: normalizedSessionId,
       senderId,
       senderRole: String(senderRole).toLowerCase(),
       message: String(message || "").trim(),
       timestamp: new Date().toISOString()
     };
 
-    const response = await axios.post(
-      buildApiUrl(`/api/sessions/${sessionId}/messages`),
-      payload
-    );
+    const endpointCandidates = [
+      `/api/sessions/${normalizedSessionId}/messages`,
+      `/api/session/${normalizedSessionId}/messages`,
+      `/api/messages/session/${normalizedSessionId}`
+    ];
+
+    const responseData = await requestFirst("post", endpointCandidates, payload);
 
     return {
       success: true,
-      messageId: response?.data?.data?.id || response?.data?.id || response?.data?.messageId,
-      data: response?.data
+      messageId: responseData?.data?.id || responseData?.id || responseData?.messageId,
+      data: responseData
     };
   } catch (error) {
     console.error("Failed to send chat message:", error?.message);
+
+    const attemptedPaths = Array.isArray(error?.attemptedPaths) ? error.attemptedPaths : [];
+    const attemptedSummary = attemptedPaths
+      .map((entry) => `${entry.path}:${entry.status ?? "ERR"}`)
+      .join(", ");
+
     return {
       success: false,
-      error: error?.response?.status || "SEND_FAILED"
+      error:
+        error?.response?.data?.message ||
+        error?.response?.data?.error ||
+        error?.message ||
+        (attemptedSummary
+          ? `Unable to send message. Tried: ${attemptedSummary}`
+          : "SEND_FAILED")
     };
   }
 }
@@ -790,15 +810,24 @@ async function getSessionMessages(sessionId) {
     return [];
   }
 
-  try {
-    const response = await axios.get(
-      buildApiUrl(`/api/sessions/${sessionId}/messages`)
-    );
+  const normalizedSessionId = String(sessionId || "").trim();
+  if (!normalizedSessionId) {
+    return [];
+  }
 
-    const messages = Array.isArray(response?.data)
-      ? response.data
-      : Array.isArray(response?.data?.messages)
-        ? response.data.messages
+  try {
+    const endpointCandidates = [
+      `/api/sessions/${normalizedSessionId}/messages`,
+      `/api/session/${normalizedSessionId}/messages`,
+      `/api/messages/session/${normalizedSessionId}`
+    ];
+
+    const responseData = await requestFirst("get", endpointCandidates);
+
+    const messages = Array.isArray(responseData)
+      ? responseData
+      : Array.isArray(responseData?.messages)
+        ? responseData.messages
         : [];
 
     // Sort by timestamp

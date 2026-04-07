@@ -13,6 +13,7 @@ function SessionChat({ session, currentUser, onClose, embedded = false, readOnly
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState("");
   const messagesEndRef = useRef(null);
+  const resolvedSessionId = session?.id || session?.sessionId || session?.session_id || session?.sessionID;
 
   const to12Hour = (timeValue) => {
     const value = String(timeValue || "").trim();
@@ -55,23 +56,27 @@ function SessionChat({ session, currentUser, onClose, embedded = false, readOnly
     // Polling for new messages every 2 seconds
     const interval = setInterval(loadMessages, 2000);
     return () => clearInterval(interval);
-  }, [session?.id]);
+  }, [resolvedSessionId]);
 
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
 
   const loadMessages = async () => {
-    if (!session?.id) return;
+    if (!resolvedSessionId) return;
+
+    setIsLoading(true);
 
     try {
       const { getSessionMessages } = await import("../utils/userManagement");
-      const msgs = await getSessionMessages(session.id);
+      const msgs = await getSessionMessages(resolvedSessionId);
       setMessages(msgs);
       setError("");
     } catch (err) {
       console.error("Failed to load messages:", err);
       setError("Failed to load messages");
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -79,6 +84,10 @@ function SessionChat({ session, currentUser, onClose, embedded = false, readOnly
     e.preventDefault();
 
     if (!newMessage.trim()) return;
+    if (!resolvedSessionId) {
+      setError("Session id is missing. Please reopen this chat.");
+      return;
+    }
 
     setIsSending(true);
 
@@ -86,7 +95,7 @@ function SessionChat({ session, currentUser, onClose, embedded = false, readOnly
       const { sendChatMessage } = await import("../utils/userManagement");
       
       const result = await sendChatMessage(
-        session.id,
+        resolvedSessionId,
         currentUser.id,
         currentUser.role,
         newMessage
@@ -96,7 +105,7 @@ function SessionChat({ session, currentUser, onClose, embedded = false, readOnly
         setNewMessage("");
         await loadMessages();
       } else {
-        setError("Failed to send message");
+        setError(result?.error ? `Failed to send message: ${result.error}` : "Failed to send message");
       }
     } catch (err) {
       setError("Failed to send message");
