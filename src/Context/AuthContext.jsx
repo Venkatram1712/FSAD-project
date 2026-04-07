@@ -1,7 +1,6 @@
 /* eslint-disable react-refresh/only-export-components */
 import { createContext, useContext, useState } from "react";
 import {
-  authenticateWithGoogleToken,
   authenticateUser,
   clearActiveSession,
   createUser,
@@ -185,36 +184,6 @@ export function AuthProvider({ children }) {
     };
   };
 
-  const googleLogin = async (idToken, role = "student") => {
-    const authResult = await authenticateWithGoogleToken(idToken, role);
-    if (!authResult.success || !authResult.user) {
-      return {
-        success: false,
-        error: authResult.error || "Google login failed"
-      };
-    }
-
-    const foundUser = authResult.user;
-    const publicUser = toPublicUser(foundUser);
-    setUser(publicUser);
-
-    if (publicUser.questionnaireCompleted) {
-      persistQuestionnaireCompletion(publicUser.id, publicUser.email, true);
-    }
-
-    recordLoginEvent({
-      userId: foundUser.id,
-      email: foundUser.email,
-      role: foundUser.role
-    });
-    setActiveSession(foundUser);
-
-    return {
-      success: true,
-      user: publicUser
-    };
-  };
-
   const markQuestionnaireCompleted = async () => {
     const currentUser = user;
     if (!currentUser) {
@@ -283,7 +252,6 @@ export function AuthProvider({ children }) {
         user,
         login,
         signup,
-        googleLogin,
         logout,
         isLoading,
         markQuestionnaireCompleted,

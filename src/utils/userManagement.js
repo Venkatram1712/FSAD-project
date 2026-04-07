@@ -242,48 +242,6 @@ async function authenticateUser(email, password) {
   }
 }
 
-async function authenticateWithGoogleToken(token, role = "student") {
-  const normalizedToken = String(token || "").trim();
-  if (!API_ENABLED || !normalizedToken) {
-    return { success: false, user: null, source: "none" };
-  }
-
-  try {
-    const response = await axios.post(buildApiUrl("/api/auth/google"), {
-      token: normalizedToken,
-      role: toBackendRole(role)
-    });
-
-    if (response?.data?.success === false) {
-      return {
-        success: false,
-        user: null,
-        source: "none",
-        error: response?.data?.message || "GOOGLE_LOGIN_FAILED"
-      };
-    }
-
-    const mappedUser = mapApiUser(response?.data, "", "");
-    if (!mappedUser) {
-      return {
-        success: false,
-        user: null,
-        source: "none",
-        error: "INVALID_GOOGLE_LOGIN_RESPONSE"
-      };
-    }
-
-    return { success: true, user: mappedUser, source: "api" };
-  } catch (error) {
-    return {
-      success: false,
-      user: null,
-      source: "none",
-      error: error?.response?.data?.message || "Google login failed"
-    };
-  }
-}
-
 async function registerUserInApi(payload) {
   const responseData = await requestFirst("post", ["/api/auth/register", "/api/users", "/api/admin/users"], {
     name: payload.name,
@@ -858,7 +816,6 @@ export {
   LOGIN_EVENTS_STORAGE_KEY,
   SIGNUP_EVENTS_STORAGE_KEY,
   USERS_STORAGE_KEY,
-  authenticateWithGoogleToken,
   authenticateUser,
   clearActiveSession,
   createSession,
