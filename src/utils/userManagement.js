@@ -24,6 +24,7 @@ const CONFIGURED_STUDENTS_ENDPOINTS = String(import.meta.env.VITE_STUDENTS_ENDPO
 const signupEventsStore = [];
 const loginEventsStore = [];
 const activeSessionsStore = new Map();
+let axiosInterceptorInstalled = false;
 
 function setAxiosAuthToken(token) {
   if (token) {
@@ -105,6 +106,36 @@ function clearAuthSession() {
   } catch {
     // Ignore storage errors.
   }
+}
+
+function getApiErrorMessage(error, fallbackMessage) {
+  return (
+    error?.response?.data?.message ||
+    error?.response?.data?.error ||
+    error?.message ||
+    fallbackMessage
+  );
+}
+
+function installAxiosInterceptors() {
+  if (axiosInterceptorInstalled) {
+    return;
+  }
+
+  axios.interceptors.response.use(
+    (response) => response,
+    (error) => {
+      const status = Number(error?.response?.status || 0);
+      if (status === 401) {
+        setAxiosAuthToken("");
+        clearAuthSession();
+      }
+
+      return Promise.reject(error);
+    }
+  );
+
+  axiosInterceptorInstalled = true;
 }
 
 function buildApiUrl(path) {
@@ -386,9 +417,18 @@ async function createUser(payload, options = {}) {
     return { success: false, error: "API_REQUIRED" };
   }
 
-  const createdInApi = await registerUserInApi(newUser);
+  let createdInApi;
+  try {
+    createdInApi = await registerUserInApi(newUser);
+  } catch (error) {
+    return {
+      success: false,
+      error: getApiErrorMessage(error, "API_CREATE_FAILED")
+    };
+  }
+
   if (!createdInApi.success) {
-    return { success: false, error: "API_CREATE_FAILED" };
+    return { success: false, error: createdInApi.error || "API_CREATE_FAILED" };
   }
 
   if (options.trackSignup) {
@@ -1013,7 +1053,8 @@ async function getSessionMessages(sessionId) {
   }
 }
 
-// Initialize axios authorization header from persisted auth session at module load.
+// Initialize shared API behavior and auth state at module load.
+installAxiosInterceptors();
 restoreAuthSession();
 
 export {

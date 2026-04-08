@@ -87,6 +87,19 @@ function buildActivityFeed() {
     .slice(0, 6);
 }
 
+function isValidEmail(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim());
+}
+
+function isStrongPassword(value) {
+  const password = String(value || "");
+  if (password.length < 8) {
+    return false;
+  }
+
+  return /[A-Z]/.test(password) && /[a-z]/.test(password) && /\d/.test(password);
+}
+
 export default function AdminDashboard() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
@@ -464,6 +477,16 @@ export default function AdminDashboard() {
       return;
     }
 
+    if (!isValidEmail(newUser.email)) {
+      setManagementError("Enter a valid email for the admin account.");
+      return;
+    }
+
+    if (!isStrongPassword(newUser.password)) {
+      setManagementError("Password must be at least 8 characters and include uppercase, lowercase, and a number.");
+      return;
+    }
+
     const result = await createUser(
       {
         name: newUser.name,
@@ -480,7 +503,7 @@ export default function AdminDashboard() {
     );
 
     if (!result.success) {
-      setManagementError("Unable to add user. The email might already exist.");
+      setManagementError(result.error || "Unable to add user. The email might already exist.");
       return;
     }
 
@@ -493,6 +516,16 @@ export default function AdminDashboard() {
   const handleAddCounselor = async () => {
     if (!newCounselor.name.trim() || !newCounselor.email.trim() || !newCounselor.password.trim()) {
       setManagementError("Counselor name, email, and password are required.");
+      return;
+    }
+
+    if (!isValidEmail(newCounselor.email)) {
+      setManagementError("Enter a valid email for the counselor account.");
+      return;
+    }
+
+    if (!isStrongPassword(newCounselor.password)) {
+      setManagementError("Password must be at least 8 characters and include uppercase, lowercase, and a number.");
       return;
     }
 
@@ -513,7 +546,7 @@ export default function AdminDashboard() {
     );
 
     if (!result.success) {
-      setManagementError("Unable to add counselor. The email might already exist.");
+      setManagementError(result.error || "Unable to add counselor. The email might already exist.");
       return;
     }
 
@@ -540,9 +573,19 @@ export default function AdminDashboard() {
   };
 
   const saveUserEdit = async () => {
+    if (!editingUserDraft?.name?.trim() || !editingUserDraft?.email?.trim()) {
+      setManagementError("Name and email are required while editing a user.");
+      return;
+    }
+
+    if (!isValidEmail(editingUserDraft.email)) {
+      setManagementError("Enter a valid email while editing a user.");
+      return;
+    }
+
     const result = await updateUserById(editingUserId, editingUserDraft);
     if (!result.success) {
-      setManagementError("Failed to update this user.");
+      setManagementError(result.error || "Failed to update this user.");
       return;
     }
 
@@ -563,13 +606,23 @@ export default function AdminDashboard() {
   };
 
   const saveCounselorEdit = async () => {
+    if (!editingCounselorDraft?.name?.trim() || !editingCounselorDraft?.email?.trim()) {
+      setManagementError("Name and email are required while editing a counselor.");
+      return;
+    }
+
+    if (!isValidEmail(editingCounselorDraft.email)) {
+      setManagementError("Enter a valid email while editing a counselor.");
+      return;
+    }
+
     const result = await updateUserById(editingCounselorId, {
       ...editingCounselorDraft,
       role: "counselor"
     });
 
     if (!result.success) {
-      setManagementError("Failed to update this counselor.");
+      setManagementError(result.error || "Failed to update this counselor.");
       return;
     }
 

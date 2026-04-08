@@ -31,6 +31,15 @@ import {
   ExternalLink
 } from "lucide-react";
 
+function isValidEmail(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim());
+}
+
+function isValidPhone(value) {
+  const cleaned = String(value || "").replace(/\D/g, "");
+  return cleaned.length === 0 || (cleaned.length >= 10 && cleaned.length <= 15);
+}
+
 function StudentDashboard() {
   const { user, logout, updateProfile } = useAuth();
   const navigate = useNavigate();
@@ -294,6 +303,16 @@ function StudentDashboard() {
 
     if (!profileForm.name.trim() || !profileForm.email.trim()) {
       setProfileError("Name and email are required.");
+      return;
+    }
+
+    if (!isValidEmail(profileForm.email)) {
+      setProfileError("Enter a valid email address.");
+      return;
+    }
+
+    if (!isValidPhone(profileForm.phone)) {
+      setProfileError("Phone should be 10 to 15 digits.");
       return;
     }
 

@@ -51,6 +51,15 @@ function getSessionId(session) {
   return session?.id || session?.sessionId || session?.session_id || session?.sessionID;
 }
 
+function isValidEmail(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim());
+}
+
+function isValidPhone(value) {
+  const cleaned = String(value || "").replace(/\D/g, "");
+  return cleaned.length === 0 || (cleaned.length >= 10 && cleaned.length <= 15);
+}
+
 export default function CounselorDashboard() {
   const { user, logout, updateProfile } = useAuth();
   const navigate = useNavigate();
@@ -133,6 +142,16 @@ export default function CounselorDashboard() {
 
     if (!profileForm.name.trim() || !profileForm.email.trim()) {
       setProfileError("Name and email are required.");
+      return;
+    }
+
+    if (!isValidEmail(profileForm.email)) {
+      setProfileError("Enter a valid email address.");
+      return;
+    }
+
+    if (!isValidPhone(profileForm.phone)) {
+      setProfileError("Phone should be 10 to 15 digits.");
       return;
     }
 
