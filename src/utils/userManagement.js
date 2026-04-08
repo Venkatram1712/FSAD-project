@@ -4,6 +4,7 @@ const USERS_STORAGE_KEY = "users";
 const SIGNUP_EVENTS_STORAGE_KEY = "signupEvents";
 const LOGIN_EVENTS_STORAGE_KEY = "loginEvents";
 const ACTIVE_SESSIONS_STORAGE_KEY = "activeSessions";
+const AUTH_SESSION_STORAGE_KEY = "authSession";
 
 const API_BASE_URL = String(import.meta.env.VITE_API_BASE_URL || "").trim().replace(/\/+$/, "");
 const API_ENABLED = true;
@@ -23,6 +24,88 @@ const CONFIGURED_STUDENTS_ENDPOINTS = String(import.meta.env.VITE_STUDENTS_ENDPO
 const signupEventsStore = [];
 const loginEventsStore = [];
 const activeSessionsStore = new Map();
+
+function setAxiosAuthToken(token) {
+  if (token) {
+    axios.defaults.headers.common.Authorization = `Bearer ${token}`;
+    return;
+  }
+
+  delete axios.defaults.headers.common.Authorization;
+}
+
+function extractTokenFromPayload(payload) {
+  if (!payload || typeof payload !== "object") {
+    return "";
+  }
+
+  return String(
+    payload.token ||
+      payload.accessToken ||
+      payload.jwt ||
+      payload?.data?.token ||
+      payload?.data?.accessToken ||
+      payload?.result?.token ||
+      ""
+  ).trim();
+}
+
+function saveAuthSession({ user, token }) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    const payload = {
+      token: String(token || "").trim(),
+      user: user ? sanitizeUser(user) : null,
+      updatedAt: new Date().toISOString()
+    };
+    window.localStorage.setItem(AUTH_SESSION_STORAGE_KEY, JSON.stringify(payload));
+  } catch {
+    // Ignore storage errors.
+  }
+}
+
+function getStoredAuthSession() {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  try {
+    const raw = window.localStorage.getItem(AUTH_SESSION_STORAGE_KEY);
+    if (!raw) {
+      return null;
+    }
+
+    const parsed = JSON.parse(raw);
+    const token = String(parsed?.token || "").trim();
+    const storedUser = parsed?.user ? sanitizeUser(parsed.user) : null;
+
+    if (!storedUser) {
+      return null;
+    }
+
+    return {
+      token,
+      user: storedUser
+    };
+  } catch {
+    return null;
+  }
+}
+
+function clearAuthSession() {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    window.localStorage.removeItem(AUTH_SESSION_STORAGE_KEY);
+  } catch {
+    // Ignore storage errors.
+  }
+}
 
 function buildApiUrl(path) {
   const normalizedPath = String(path || "");
@@ -227,7 +310,9 @@ async function authenticateUser(email, password) {
       };
     }
 
-    return { success: true, user: mappedUser, source: "api" };
+    const token = extractTokenFromPayload(response?.data);
+
+    return { success: true, user: mappedUser, token, source: "api" };
   } catch (error) {
     return {
       success: false,
@@ -419,10 +504,14 @@ function getLoginEvents() {
   return [...loginEventsStore];
 }
 
-function setActiveSession(user) {
+function setActiveSession(user, token) {
   if (!user?.id) {
     return;
   }
+
+  const currentAuthSession = getStoredAuthSession();
+  const existingToken = currentAuthSession?.token || "";
+  const tokenToPersist = String(token || existingToken || "").trim();
 
   activeSessionsStore.set(user.id, {
     userId: user.id,
@@ -431,6 +520,9 @@ function setActiveSession(user) {
     role: normalizeRole(user.role),
     updatedAt: new Date().toISOString()
   });
+
+  saveAuthSession({ user, token: tokenToPersist });
+  setAxiosAuthToken(tokenToPersist);
 }
 
 function clearActiveSession(userId) {
@@ -439,10 +531,29 @@ function clearActiveSession(userId) {
   }
 
   activeSessionsStore.delete(userId);
+  clearAuthSession();
+  setAxiosAuthToken("");
 }
 
 function getActiveSessions() {
   return Array.from(activeSessionsStore.values());
+}
+
+function restoreAuthSession() {
+  const session = getStoredAuthSession();
+  if (!session?.user) {
+    setAxiosAuthToken("");
+    return null;
+  }
+
+  setAxiosAuthToken(session.token);
+  return session;
+}
+
+function startAuthSession(user, token) {
+  const normalizedToken = String(token || "").trim();
+  setAxiosAuthToken(normalizedToken);
+  saveAuthSession({ user, token: normalizedToken });
 }
 
 async function getUsers() {
@@ -902,8 +1013,12 @@ async function getSessionMessages(sessionId) {
   }
 }
 
+// Initialize axios authorization header from persisted auth session at module load.
+restoreAuthSession();
+
 export {
   ACTIVE_SESSIONS_STORAGE_KEY,
+  AUTH_SESSION_STORAGE_KEY,
   LOGIN_EVENTS_STORAGE_KEY,
   SIGNUP_EVENTS_STORAGE_KEY,
   USERS_STORAGE_KEY,
@@ -931,6 +1046,8 @@ export {
   saveUsers,
   sendChatMessage,
   setActiveSession,
+  startAuthSession,
+  restoreAuthSession,
   updateSessionSchedule,
   updateSessionStatus,
   updateUserById

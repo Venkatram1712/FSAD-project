@@ -1,10 +1,11 @@
 /* eslint-disable react-refresh/only-export-components */
-import { createContext, useContext, useState } from "react";
+import { createContext, useContext, useEffect, useState } from "react";
 import {
   authenticateUser,
   clearActiveSession,
   createUser,
   recordLoginEvent,
+  restoreAuthSession,
   setActiveSession,
   updateUserById
 } from "../utils/userManagement";
@@ -117,6 +118,13 @@ export function AuthProvider({ children }) {
 
   const isLoading = false;
 
+  useEffect(() => {
+    const restored = restoreAuthSession();
+    if (restored?.user) {
+      setUser(toPublicUser(restored.user));
+    }
+  }, []);
+
   const login = async (email, password) => {
     const authResult = await authenticateUser(email, password);
     if (!authResult.success || !authResult.user) {
@@ -127,6 +135,7 @@ export function AuthProvider({ children }) {
     }
 
     const foundUser = authResult.user;
+    const token = String(authResult?.token || "").trim();
 
     const publicUser = toPublicUser(foundUser);
     setUser(publicUser);
@@ -140,7 +149,7 @@ export function AuthProvider({ children }) {
       email: foundUser.email,
       role: foundUser.role
     });
-    setActiveSession(foundUser);
+    setActiveSession(foundUser, token);
 
     return {
       success: true,
