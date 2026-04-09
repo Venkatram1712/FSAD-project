@@ -1,6 +1,7 @@
 /* eslint-disable react-refresh/only-export-components */
 import { createContext, useContext, useEffect, useState } from "react";
 import {
+  AUTH_SESSION_EXPIRED_EVENT,
   authenticateUser,
   clearActiveSession,
   createUser,
@@ -125,6 +126,30 @@ export function AuthProvider({ children }) {
     }
   }, []);
 
+  useEffect(() => {
+    const handleSessionExpired = () => {
+      setUser(null);
+    };
+
+    if (typeof window !== "undefined") {
+      window.addEventListener(AUTH_SESSION_EXPIRED_EVENT, handleSessionExpired);
+    }
+
+    const intervalId = setInterval(() => {
+      const restored = restoreAuthSession();
+      if (!restored?.user) {
+        setUser((current) => (current ? null : current));
+      }
+    }, 30000);
+
+    return () => {
+      clearInterval(intervalId);
+      if (typeof window !== "undefined") {
+        window.removeEventListener(AUTH_SESSION_EXPIRED_EVENT, handleSessionExpired);
+      }
+    };
+  }, []);
+
   const login = async (email, password) => {
     const authResult = await authenticateUser(email, password);
     if (!authResult.success || !authResult.user) {
@@ -149,7 +174,7 @@ export function AuthProvider({ children }) {
       email: foundUser.email,
       role: foundUser.role
     });
-    setActiveSession(foundUser, token);
+    setActiveSession(foundUser, token, authResult?.tokenType, authResult?.expiresAt);
 
     return {
       success: true,
@@ -184,7 +209,25 @@ export function AuthProvider({ children }) {
     // New signups should always see the questionnaire once.
     persistQuestionnaireCompletion(result.user.id, result.user.email, false);
 
-    const publicUser = toPublicUser(result.user);
+    let sessionUser = result.user;
+
+    const signupToken = String(result?.token || "").trim();
+    if (signupToken) {
+      setActiveSession(result.user, signupToken, result?.tokenType, result?.expiresAt);
+    } else {
+      const loginResult = await authenticateUser(email.trim(), password);
+      if (!loginResult?.success || !loginResult?.user) {
+        return {
+          success: false,
+          error: loginResult?.error || "Account created but automatic sign-in failed"
+        };
+      }
+
+      sessionUser = loginResult.user;
+      setActiveSession(sessionUser, loginResult.token, loginResult?.tokenType, loginResult?.expiresAt);
+    }
+
+    const publicUser = toPublicUser(sessionUser);
     setUser(publicUser);
 
     return {

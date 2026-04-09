@@ -8,6 +8,36 @@ const RESOURCE_ENDPOINTS = ["/api/resources", "/api/career-resources"];
 const CONTENT_ENDPOINTS = ["/api/resource-contents", "/api/resources"];
 const CAREER_PATH_ENDPOINTS = ["/api/career-paths", "/api/paths"];
 
+function getApiErrorMessage(error, fallbackMessage) {
+  const responseData = error?.response?.data;
+
+  if (Array.isArray(responseData?.details) && responseData.details.length > 0) {
+    const details = responseData.details
+      .map((item) => {
+        if (typeof item === "string") {
+          return item;
+        }
+
+        const field = String(item?.field || item?.name || "").trim();
+        const message = String(item?.message || item?.defaultMessage || item?.error || "").trim();
+        return field && message ? `${field}: ${message}` : message;
+      })
+      .filter(Boolean);
+
+    if (details.length > 0) {
+      return details.join("; ");
+    }
+  }
+
+  return (
+    responseData?.message ||
+    responseData?.error ||
+    responseData?.title ||
+    error?.message ||
+    fallbackMessage
+  );
+}
+
 function buildApiUrl(path) {
   const normalizedPath = String(path || "");
   if (!API_BASE_URL) {
@@ -30,7 +60,7 @@ async function requestFirst(method, paths, data) {
     throw new Error("API_DISABLED");
   }
 
-  let lastError = null;
+  const requestErrors = [];
 
   for (const path of paths) {
     try {
@@ -41,11 +71,25 @@ async function requestFirst(method, paths, data) {
       });
       return response?.data;
     } catch (error) {
-      lastError = error;
+      requestErrors.push({
+        path,
+        status: error?.response?.status || null,
+        message: getApiErrorMessage(error, "REQUEST_FAILED")
+      });
     }
   }
 
-  throw lastError || new Error("REQUEST_FAILED");
+  const attemptedSummary = requestErrors
+    .map((entry) => `${entry.path}:${entry.status ?? "ERR"}`)
+    .join(", ");
+
+  const message =
+    requestErrors.find((entry) => entry.message)?.message ||
+    `API request failed (${String(method || "get").toUpperCase()}). Tried: ${attemptedSummary || "none"}.`;
+
+  const requestError = new Error(message);
+  requestError.attemptedPaths = requestErrors;
+  throw requestError;
 }
 
 function mapList(payload) {

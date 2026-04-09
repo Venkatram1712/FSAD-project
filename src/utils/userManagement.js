@@ -5,6 +5,7 @@ const SIGNUP_EVENTS_STORAGE_KEY = "signupEvents";
 const LOGIN_EVENTS_STORAGE_KEY = "loginEvents";
 const ACTIVE_SESSIONS_STORAGE_KEY = "activeSessions";
 const AUTH_SESSION_STORAGE_KEY = "authSession";
+const AUTH_SESSION_EXPIRED_EVENT = "auth:session-expired";
 
 const API_BASE_URL = String(import.meta.env.VITE_API_BASE_URL || "").trim().replace(/\/+$/, "");
 const API_ENABLED = true;
@@ -26,13 +27,146 @@ const loginEventsStore = [];
 const activeSessionsStore = new Map();
 let axiosInterceptorInstalled = false;
 
-function setAxiosAuthToken(token) {
+function setAxiosAuthToken(token, tokenType = "Bearer") {
   if (token) {
-    axios.defaults.headers.common.Authorization = `Bearer ${token}`;
+    const normalizedTokenType = String(tokenType || "Bearer").trim() || "Bearer";
+    axios.defaults.headers.common.Authorization = `${normalizedTokenType} ${token}`;
     return;
   }
 
   delete axios.defaults.headers.common.Authorization;
+}
+
+function emitAuthSessionExpired(reason = "SESSION_EXPIRED") {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  window.dispatchEvent(
+    new CustomEvent(AUTH_SESSION_EXPIRED_EVENT, {
+      detail: { reason }
+    })
+  );
+}
+
+function decodeJwtPayload(token) {
+  const value = String(token || "").trim();
+  if (!value) {
+    return null;
+  }
+
+  const parts = value.split(".");
+  if (parts.length < 2) {
+    return null;
+  }
+
+  try {
+    const normalizedPayload = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const paddedPayload = normalizedPayload.padEnd(Math.ceil(normalizedPayload.length / 4) * 4, "=");
+    const decoded = atob(paddedPayload);
+    return JSON.parse(decoded);
+  } catch {
+    return null;
+  }
+}
+
+function toIsoTimestamp(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value.toISOString();
+  }
+
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      return null;
+    }
+
+    const milliseconds = value > 1e12 ? value : value * 1000;
+    const parsed = new Date(milliseconds);
+    return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+  }
+
+  const asString = String(value || "").trim();
+  if (!asString) {
+    return null;
+  }
+
+  if (/^\d+$/.test(asString)) {
+    return toIsoTimestamp(Number(asString));
+  }
+
+  const parsed = new Date(asString);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
+
+function deriveTokenExpiry(token) {
+  const payload = decodeJwtPayload(token);
+  return toIsoTimestamp(payload?.exp);
+}
+
+function getNested(payload, path) {
+  if (!payload || typeof payload !== "object") {
+    return undefined;
+  }
+
+  return path.split(".").reduce((current, key) => {
+    if (!current || typeof current !== "object") {
+      return undefined;
+    }
+
+    return current[key];
+  }, payload);
+}
+
+function extractTokenTypeFromPayload(payload) {
+  return String(
+    payload?.tokenType ||
+      payload?.type ||
+      payload?.data?.tokenType ||
+      payload?.data?.type ||
+      "Bearer"
+  )
+    .trim() || "Bearer";
+}
+
+function extractSessionExpiryFromPayload(payload, token) {
+  const explicitExpiry =
+    getNested(payload, "expiresAt") ||
+    getNested(payload, "expiry") ||
+    getNested(payload, "expires_at") ||
+    getNested(payload, "data.expiresAt") ||
+    getNested(payload, "data.expiry") ||
+    getNested(payload, "result.expiresAt");
+
+  const normalizedExplicitExpiry = toIsoTimestamp(explicitExpiry);
+  if (normalizedExplicitExpiry) {
+    return normalizedExplicitExpiry;
+  }
+
+  const expiresInCandidate =
+    getNested(payload, "expiresIn") ||
+    getNested(payload, "expires_in") ||
+    getNested(payload, "data.expiresIn") ||
+    getNested(payload, "result.expiresIn");
+
+  const expiresInSeconds = Number(expiresInCandidate);
+  if (Number.isFinite(expiresInSeconds) && expiresInSeconds > 0) {
+    return new Date(Date.now() + expiresInSeconds * 1000).toISOString();
+  }
+
+  return deriveTokenExpiry(token);
+}
+
+function isSessionExpired(expiresAt) {
+  const parsed = toIsoTimestamp(expiresAt);
+  if (!parsed) {
+    return false;
+  }
+
+  return new Date(parsed).getTime() <= Date.now();
 }
 
 function extractTokenFromPayload(payload) {
@@ -51,14 +185,20 @@ function extractTokenFromPayload(payload) {
   ).trim();
 }
 
-function saveAuthSession({ user, token }) {
+function saveAuthSession({ user, token, tokenType = "Bearer", expiresAt = null }) {
   if (typeof window === "undefined") {
     return;
   }
 
   try {
+    const normalizedToken = String(token || "").trim();
+    const normalizedTokenType = String(tokenType || "Bearer").trim() || "Bearer";
+    const normalizedExpiresAt = toIsoTimestamp(expiresAt || deriveTokenExpiry(normalizedToken));
+
     const payload = {
-      token: String(token || "").trim(),
+      token: normalizedToken,
+      tokenType: normalizedTokenType,
+      expiresAt: normalizedExpiresAt,
       user: user ? sanitizeUser(user) : null,
       updatedAt: new Date().toISOString()
     };
@@ -81,14 +221,25 @@ function getStoredAuthSession() {
 
     const parsed = JSON.parse(raw);
     const token = String(parsed?.token || "").trim();
+    const tokenType = String(parsed?.tokenType || "Bearer").trim() || "Bearer";
+    const expiresAt = toIsoTimestamp(parsed?.expiresAt || deriveTokenExpiry(token));
     const storedUser = parsed?.user ? sanitizeUser(parsed.user) : null;
 
     if (!storedUser) {
       return null;
     }
 
+    if (isSessionExpired(expiresAt)) {
+      clearAuthSession();
+      setAxiosAuthToken("");
+      emitAuthSessionExpired("SESSION_EXPIRED");
+      return null;
+    }
+
     return {
       token,
+      tokenType,
+      expiresAt,
       user: storedUser
     };
   } catch {
@@ -109,9 +260,61 @@ function clearAuthSession() {
 }
 
 function getApiErrorMessage(error, fallbackMessage) {
+  const responseData = error?.response?.data;
+  const details = responseData?.details;
+
+  if (Array.isArray(details) && details.length > 0) {
+    const detailMessages = details
+      .map((item) => {
+        if (typeof item === "string") {
+          return item;
+        }
+
+        const field = String(item?.field || item?.name || "").trim();
+        const message = String(item?.message || item?.defaultMessage || item?.error || "").trim();
+        if (field && message) {
+          return `${field}: ${message}`;
+        }
+
+        return message;
+      })
+      .filter(Boolean);
+
+    if (detailMessages.length > 0) {
+      return detailMessages.join("; ");
+    }
+  }
+
+  if (Array.isArray(responseData?.errors) && responseData.errors.length > 0) {
+    const collected = responseData.errors
+      .map((item) => {
+        if (typeof item === "string") {
+          return item;
+        }
+
+        return item?.message || item?.defaultMessage || item?.error || "";
+      })
+      .filter(Boolean);
+
+    if (collected.length > 0) {
+      return collected.join("; ");
+    }
+  }
+
+  if (responseData?.fieldErrors && typeof responseData.fieldErrors === "object") {
+    const pairs = Object.entries(responseData.fieldErrors)
+      .map(([field, message]) => `${field}: ${String(message || "")}`)
+      .filter((entry) => !entry.endsWith(": "));
+
+    if (pairs.length > 0) {
+      return pairs.join("; ");
+    }
+  }
+
   return (
-    error?.response?.data?.message ||
-    error?.response?.data?.error ||
+    responseData?.message ||
+    responseData?.error ||
+    responseData?.title ||
     error?.message ||
     fallbackMessage
   );
@@ -129,6 +332,7 @@ function installAxiosInterceptors() {
       if (status === 401) {
         setAxiosAuthToken("");
         clearAuthSession();
+        emitAuthSessionExpired("UNAUTHORIZED");
       }
 
       return Promise.reject(error);
@@ -285,7 +489,8 @@ async function requestFirst(method, paths, data) {
     } catch (error) {
       requestErrors.push({
         path,
-        status: error?.response?.status || null
+        status: error?.response?.status || null,
+        message: getApiErrorMessage(error, "REQUEST_FAILED")
       });
       // Try the next known endpoint variant.
     }
@@ -297,7 +502,8 @@ async function requestFirst(method, paths, data) {
 
   const requestError = new Error(
     `API request failed (${String(method || "get").toUpperCase()}). ` +
-      `Checked endpoints at ${API_BASE_URL || "(dev proxy /api)"}: ${attempted || "none"}.`
+      `Checked endpoints at ${API_BASE_URL || "(dev proxy /api)"}: ${attempted || "none"}. ` +
+      `${requestErrors.find((entry) => entry.message)?.message || ""}`
   );
   requestError.attemptedPaths = requestErrors;
   throw requestError;
@@ -342,17 +548,19 @@ async function authenticateUser(email, password) {
     }
 
     const token = extractTokenFromPayload(response?.data);
+    const tokenType = extractTokenTypeFromPayload(response?.data);
+    const expiresAt = extractSessionExpiryFromPayload(response?.data, token);
 
-    return { success: true, user: mappedUser, token, source: "api" };
+    return { success: true, user: mappedUser, token, tokenType, expiresAt, source: "api" };
   } catch (error) {
     return {
       success: false,
       user: null,
       source: "none",
-      error:
-        error?.response?.data?.message ||
-        error?.response?.data?.error ||
-        (error?.response?.status === 401 ? "Invalid credentials" : "Unable to connect to backend")
+      error: getApiErrorMessage(
+        error,
+        error?.response?.status === 401 ? "Invalid credentials" : "Unable to connect to backend"
+      )
     };
   }
 }
@@ -387,7 +595,11 @@ async function registerUserInApi(payload) {
     };
   }
 
-  return { success: true, user: mappedUser };
+  const token = extractTokenFromPayload(responseData);
+  const tokenType = extractTokenTypeFromPayload(responseData);
+  const expiresAt = extractSessionExpiryFromPayload(responseData, token);
+
+  return { success: true, user: mappedUser, token, tokenType, expiresAt };
 }
 
 async function createUser(payload, options = {}) {
@@ -440,7 +652,13 @@ async function createUser(payload, options = {}) {
     });
   }
 
-  return { success: true, user: createdInApi.user || newUser };
+  return {
+    success: true,
+    user: createdInApi.user || newUser,
+    token: String(createdInApi.token || "").trim(),
+    tokenType: String(createdInApi.tokenType || "Bearer").trim() || "Bearer",
+    expiresAt: createdInApi.expiresAt || null
+  };
 }
 
 async function updateUserById(userId, updates) {
@@ -544,14 +762,18 @@ function getLoginEvents() {
   return [...loginEventsStore];
 }
 
-function setActiveSession(user, token) {
+function setActiveSession(user, token, tokenType = "Bearer", expiresAt) {
   if (!user?.id) {
     return;
   }
 
   const currentAuthSession = getStoredAuthSession();
   const existingToken = currentAuthSession?.token || "";
+  const existingTokenType = currentAuthSession?.tokenType || "Bearer";
+  const existingExpiry = currentAuthSession?.expiresAt || null;
   const tokenToPersist = String(token || existingToken || "").trim();
+  const tokenTypeToPersist = String(tokenType || existingTokenType || "Bearer").trim() || "Bearer";
+  const expiresAtToPersist = toIsoTimestamp(expiresAt || existingExpiry || deriveTokenExpiry(tokenToPersist));
 
   activeSessionsStore.set(user.id, {
     userId: user.id,
@@ -561,16 +783,20 @@ function setActiveSession(user, token) {
     updatedAt: new Date().toISOString()
   });
 
-  saveAuthSession({ user, token: tokenToPersist });
-  setAxiosAuthToken(tokenToPersist);
+  saveAuthSession({
+    user,
+    token: tokenToPersist,
+    tokenType: tokenTypeToPersist,
+    expiresAt: expiresAtToPersist
+  });
+  setAxiosAuthToken(tokenToPersist, tokenTypeToPersist);
 }
 
 function clearActiveSession(userId) {
-  if (!userId) {
-    return;
+  if (userId) {
+    activeSessionsStore.delete(userId);
   }
 
-  activeSessionsStore.delete(userId);
   clearAuthSession();
   setAxiosAuthToken("");
 }
@@ -586,14 +812,21 @@ function restoreAuthSession() {
     return null;
   }
 
-  setAxiosAuthToken(session.token);
+  setAxiosAuthToken(session.token, session.tokenType);
   return session;
 }
 
-function startAuthSession(user, token) {
+function startAuthSession(user, token, tokenType = "Bearer", expiresAt) {
   const normalizedToken = String(token || "").trim();
-  setAxiosAuthToken(normalizedToken);
-  saveAuthSession({ user, token: normalizedToken });
+  const normalizedTokenType = String(tokenType || "Bearer").trim() || "Bearer";
+  const normalizedExpiresAt = toIsoTimestamp(expiresAt || deriveTokenExpiry(normalizedToken));
+  setAxiosAuthToken(normalizedToken, normalizedTokenType);
+  saveAuthSession({
+    user,
+    token: normalizedToken,
+    tokenType: normalizedTokenType,
+    expiresAt: normalizedExpiresAt
+  });
 }
 
 async function getUsers() {
@@ -1059,6 +1292,7 @@ restoreAuthSession();
 
 export {
   ACTIVE_SESSIONS_STORAGE_KEY,
+  AUTH_SESSION_EXPIRED_EVENT,
   AUTH_SESSION_STORAGE_KEY,
   LOGIN_EVENTS_STORAGE_KEY,
   SIGNUP_EVENTS_STORAGE_KEY,
