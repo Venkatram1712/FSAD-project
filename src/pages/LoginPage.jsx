@@ -1,7 +1,8 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { useAuth } from "../Context/AuthContext.jsx";
 import { Button } from "../components/button";
+import { Alert, AlertDescription, AlertTitle } from "../components/alert";
 import { Input } from "../components/input";
 import { Label } from "../components/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/card";
@@ -18,6 +19,27 @@ function generateCaptcha(length = 5) {
 
 function isValidEmail(value) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim());
+}
+
+function normalizeRole(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (raw === "role_admin" || raw === "admin") return "admin";
+  if (raw === "role_counselor" || raw === "counselor") return "counselor";
+  if (raw === "role_student" || raw === "student") return "student";
+  return raw;
+}
+
+function getHomeRouteForUser(user) {
+  const normalizedRole = normalizeRole(user?.role);
+  if (normalizedRole === "admin") {
+    return "/admin";
+  }
+
+  if (normalizedRole === "counselor") {
+    return "/counselor";
+  }
+
+  return user?.questionnaireCompleted ? "/student" : "/questionnaire";
 }
 
 function LoginPage() {
@@ -38,8 +60,16 @@ function LoginPage() {
     [captchaCode]
   );
 
-  const { login } = useAuth();
+  const { user, login } = useAuth();
   const navigate = useNavigate();
+
+  useEffect(() => {
+    if (!user) {
+      return;
+    }
+
+    navigate(getHomeRouteForUser(user), { replace: true });
+  }, [user, navigate]);
 
   const refreshCaptcha = () => {
     setCaptchaCode(generateCaptcha());
@@ -89,15 +119,7 @@ function LoginPage() {
 
     if (loginResult?.success && loginResult?.user) {
       const loggedInUser = loginResult.user;
-      if (loggedInUser.role === "admin") {
-        navigate("/admin");
-      } else if (loggedInUser.role === "counselor") {
-        navigate("/counselor");
-      } else if (loggedInUser.questionnaireCompleted) {
-        navigate("/student");
-      } else {
-        navigate("/questionnaire");
-      }
+      navigate(getHomeRouteForUser(loggedInUser), { replace: true });
       return;
     }
 
@@ -106,8 +128,9 @@ function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
-      <Card className="w-full max-w-md">
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-indigo-100 px-4 py-6 sm:px-6 lg:px-8">
+      <div className="mx-auto flex min-h-[calc(100vh-3rem)] w-full max-w-6xl items-center justify-center">
+      <Card className="w-full max-w-md border-slate-200/80 shadow-xl">
         <CardHeader className="space-y-1 text-center">
           <div className="flex justify-center mb-4">
             <div className="p-3 bg-indigo-100 rounded-full">
@@ -182,7 +205,12 @@ function LoginPage() {
               {errors.captchaInput && <p className="text-xs text-red-600">{errors.captchaInput}</p>}
             </div>
 
-            {serverError && <p className="text-sm text-red-600">{serverError}</p>}
+            {serverError && (
+              <Alert variant="destructive">
+                <AlertTitle>Login failed</AlertTitle>
+                <AlertDescription>{serverError}</AlertDescription>
+              </Alert>
+            )}
 
             <Button type="submit" className="w-full" disabled={isSubmitting}>
               {isSubmitting ? "Logging in..." : "Login"}
@@ -194,6 +222,7 @@ function LoginPage() {
           </div>
         </CardContent>
       </Card>
+      </div>
     </div>
   );
 }

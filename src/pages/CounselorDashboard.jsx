@@ -6,12 +6,14 @@ import { Label } from "../components/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/tabs";
 import { Badge } from "../components/badge";
-import { CountUp } from "../components/count-up";
 import { useNavigate } from "react-router-dom";
 import CreateSessionDialog from "../components/CreateSessionDialog.jsx";
 import SessionChat from "../components/SessionChat.jsx";
+import SessionCard from "../components/SessionCard.jsx";
+import StatCard from "../components/StatCard.jsx";
+import DashboardHeader from "../components/DashboardHeader.jsx";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../components/dialog";
-import { Calendar, GraduationCap, LogOut, User, Users } from "lucide-react";
+import { Calendar, Users } from "lucide-react";
 import { deleteSessionById, getStudents, getSessionsByCounselor } from "../utils/userManagement";
 
 function to12Hour(timeValue) {
@@ -63,6 +65,14 @@ function isValidPhone(value) {
 export default function CounselorDashboard() {
   const { user, logout, updateProfile } = useAuth();
   const navigate = useNavigate();
+  const [darkMode, setDarkMode] = useState(() => localStorage.getItem("darkMode") === "true");
+
+  const toggleDark = () => {
+    setDarkMode((prev) => {
+      localStorage.setItem("darkMode", String(!prev));
+      return !prev;
+    });
+  };
   const [activeTab, setActiveTab] = useState("overview");
   const [students, setStudents] = useState([]);
   const [sessions, setSessions] = useState([]);
@@ -238,36 +248,20 @@ export default function CounselorDashboard() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <header className="bg-white border-b">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-          <div className="flex justify-between items-center">
-            <div className="flex items-center gap-2">
-              <GraduationCap className="w-8 h-8 text-indigo-600" />
-              <span className="text-xl font-semibold">Career Guidance Platform</span>
-            </div>
-            <div className="flex items-center gap-4">
-              <div className="flex items-center gap-2">
-                <User className="w-4 h-4" />
-                <span className="text-sm">{user?.name}</span>
-                <Badge variant="outline">{user?.role}</Badge>
-              </div>
-              <Button variant="outline" size="sm" onClick={handleLogout}>
-                <LogOut className="w-4 h-4 mr-2" />
-                Logout
-              </Button>
-              <Button variant="outline" size="sm" onClick={() => setShowEditProfileDialog(true)}>
-                Edit Profile
-              </Button>
-            </div>
-          </div>
-        </div>
-      </header>
+    <div className={darkMode ? "dark" : ""}>
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-950">
+      <DashboardHeader
+        user={user}
+        onLogout={handleLogout}
+        onEditProfile={() => setShowEditProfileDialog(true)}
+        darkMode={darkMode}
+        onToggleDark={toggleDark}
+      />
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="mb-8">
-          <h1 className="text-3xl mb-2">Welcome, Counselor {user?.name}!</h1>
-          <p className="text-gray-600">Manage your students and counseling sessions</p>
+          <h1 className="text-3xl mb-2 dark:text-white">Welcome, Counselor {user?.name}!</h1>
+          <p className="text-gray-600 dark:text-gray-400">Manage your students and counseling sessions</p>
         </div>
 
         {error && <p className="mb-4 text-sm text-red-600">{error}</p>}
@@ -282,25 +276,8 @@ export default function CounselorDashboard() {
 
           <TabsContent value="overview" className="space-y-6">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <Card>
-                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-sm font-medium">Active Students</CardTitle>
-                  <Users className="h-4 w-4 text-muted-foreground" />
-                </CardHeader>
-                <CardContent>
-                  <CountUp end={students.length} className="text-2xl font-bold" />
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-sm font-medium">Scheduled Sessions</CardTitle>
-                  <Calendar className="h-4 w-4 text-muted-foreground" />
-                </CardHeader>
-                <CardContent>
-                  <CountUp end={scheduledSessions.length} className="text-2xl font-bold" />
-                </CardContent>
-              </Card>
+              <StatCard title="Active Students" value={students.length} icon={Users} />
+              <StatCard title="Scheduled Sessions" value={scheduledSessions.length} icon={Calendar} />
             </div>
           </TabsContent>
 
@@ -343,36 +320,14 @@ export default function CounselorDashboard() {
               <CardContent className="space-y-4">
                 {scheduledSessions.length === 0 && <p className="text-sm text-gray-500">No scheduled sessions available.</p>}
                 {scheduledSessions.map((session) => (
-                  <div key={getSessionId(session)} className="flex items-start justify-between p-4 border rounded-lg">
-                    <div>
-                      <h4 className="font-medium">{session.topic}</h4>
-                      <p className="text-sm text-gray-600">{session.studentName || session.student || "Student"}</p>
-                      <div className="flex items-center gap-4 mt-2 text-sm text-gray-500">
-                        <span>{String(session.date || "").slice(0, 10)}</span>
-                        <span>{to12Hour(session.startTime || session.time)} - {to12Hour(session.endTime)}</span>
-                      </div>
-                      {isSessionOver(session) && <p className="mt-2 text-xs text-amber-700">session is over</p>}
-                    </div>
-                    <div className="flex gap-2">
-                      {isSessionOver(session) ? (
-                        <Button size="sm" variant="outline" onClick={() => handleViewChats(session)}>
-                          View Chats
-                        </Button>
-                      ) : (
-                        <Button size="sm" onClick={() => handleStartSession(session)}>
-                          Start Session
-                        </Button>
-                      )}
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="text-red-600 border-red-200 hover:bg-red-50"
-                        onClick={() => handleDeleteSession(getSessionId(session))}
-                      >
-                        Delete
-                      </Button>
-                    </div>
-                  </div>
+                  <SessionCard
+                    key={session.id || session.sessionId}
+                    session={session}
+                    isOver={isSessionOver(session)}
+                    canJoin={isWithinSessionWindow(session)}
+                    onJoin={handleStartSession}
+                    onViewChats={handleViewChats}
+                  />
                 ))}
               </CardContent>
             </Card>
@@ -515,6 +470,7 @@ export default function CounselorDashboard() {
           onSessionCreated={loadDashboardData}
         />
       </main>
+    </div>
     </div>
   );
 }

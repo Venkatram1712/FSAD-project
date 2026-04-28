@@ -1,3 +1,5 @@
 @import './fonts.css';
 @import './tailwind.css';
 @import './theme.pcss';
+
+@variant dark (&:where(.dark, .dark *));

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { useAuth } from "../Context/AuthContext.jsx";
 import { Button } from "../components/button";
+import { Alert, AlertDescription, AlertTitle } from "../components/alert";
 import { Input } from "../components/input";
 import { Label } from "../components/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/card";
@@ -75,20 +76,30 @@ function SignupPage() {
     }
 
     setIsSubmitting(true);
-    const signupResult = await signup(name.trim(), email.trim(), password);
-    setIsSubmitting(false);
 
-    if (!signupResult?.success || !signupResult?.user) {
-      setError(signupResult?.error || "Registration failed. Please check backend API.");
-      return;
+    try {
+      const signupResult = await signup(name.trim(), email.trim(), password);
+
+      if (!signupResult?.success || !signupResult?.user) {
+        setError(signupResult?.error || "Registration failed. Please check backend API.");
+        return;
+      }
+
+      navigate(getTargetPathByRole(signupResult.user));
+    } catch (submitError) {
+      setError(
+        submitError?.message ||
+          "Unable to create account right now. Backend register API may be unavailable."
+      );
+    } finally {
+      setIsSubmitting(false);
     }
-
-    navigate(getTargetPathByRole(signupResult.user));
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
-      <Card className="w-full max-w-md">
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-indigo-100 px-4 py-6 sm:px-6 lg:px-8">
+      <div className="mx-auto flex min-h-[calc(100vh-3rem)] w-full max-w-6xl items-center justify-center">
+      <Card className="w-full max-w-md border-slate-200/80 shadow-xl">
         <CardHeader className="space-y-1 text-center">
           <div className="flex justify-center mb-4">
             <div className="p-3 bg-indigo-100 rounded-full">
@@ -156,7 +167,12 @@ function SignupPage() {
               />
               {errors.confirmPassword && <p className="text-xs text-red-600">{errors.confirmPassword}</p>}
             </div>
-            {error && <p className="text-sm text-red-600">{error}</p>}
+            {error && (
+              <Alert variant="destructive">
+                <AlertTitle>Sign up failed</AlertTitle>
+                <AlertDescription>{error}</AlertDescription>
+              </Alert>
+            )}
             <Button type="submit" className="w-full" disabled={isSubmitting}>
               {isSubmitting ? "Creating account..." : "Sign Up"}
             </Button>
@@ -166,6 +182,7 @@ function SignupPage() {
           </div>
         </CardContent>
       </Card>
+      </div>
     </div>
   );
 }

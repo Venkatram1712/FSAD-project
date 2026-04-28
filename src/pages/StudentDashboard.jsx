@@ -6,27 +6,23 @@ import { Label } from "../components/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/tabs";
 import { Badge } from "../components/badge";
-import { CountUp } from "../components/count-up";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../components/dialog";
 import SessionChat from "../components/SessionChat.jsx";
+import SessionCard from "../components/SessionCard.jsx";
+import StatCard from "../components/StatCard.jsx";
+import DashboardHeader from "../components/DashboardHeader.jsx";
 import { useNavigate } from "react-router-dom";
 import {
   getCareerPaths,
   getCareerResources,
   getResourceContents
 } from "../utils/careerResources";
+import { getSessionsByStudent } from "../utils/userManagement";
 import {
-  getSessionsByStudent
-} from "../utils/userManagement";
-import {
-  GraduationCap,
-  Calendar,
   BookOpen,
-  MessageSquare,
-  TrendingUp,
-  LogOut,
+  Calendar,
   Clock,
-  User,
+  TrendingUp,
   Play,
   ExternalLink
 } from "lucide-react";
@@ -43,6 +39,7 @@ function isValidPhone(value) {
 function StudentDashboard() {
   const { user, logout, updateProfile } = useAuth();
   const navigate = useNavigate();
+  const [darkMode, setDarkMode] = useState(() => localStorage.getItem("darkMode") === "true");
   const [recentResources, setRecentResources] = useState([]);
   const [selectedResource, setSelectedResource] = useState(null);
   const [resourceContents, setResourceContents] = useState([]);
@@ -115,6 +112,13 @@ function StudentDashboard() {
   const handleLogout = () => {
     logout();
     navigate("/login");
+  };
+
+  const toggleDark = () => {
+    setDarkMode((prev) => {
+      localStorage.setItem("darkMode", String(!prev));
+      return !prev;
+    });
   };
 
   const handleViewResource = (resource) => {
@@ -196,7 +200,6 @@ function StudentDashboard() {
       });
       
       setUpcomingSessions(upcomingOnly);
-      console.log(`✅ Loaded ${upcomingOnly.length} upcoming sessions`);
     } catch (error) {
       setSessionsError(error?.message || "Unable to load sessions");
       console.error("Error loading sessions:", error);
@@ -333,44 +336,30 @@ function StudentDashboard() {
       }
 
       setProfileSuccess("Profile updated successfully.");
+      setIsProfileDialogOpen(false);
+      setTimeout(() => {
+        setProfileSuccess("");
+      }, 3000);
     } finally {
       setIsSavingProfile(false);
     }
   };
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <header className="bg-white border-b">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-          <div className="flex justify-between items-center">
-            <div className="flex items-center gap-2">
-              <GraduationCap className="w-8 h-8 text-indigo-600" />
-              <span className="text-xl font-semibold">Career Guidance Platform</span>
-            </div>
-            <div className="flex items-center gap-4">
-              <div className="flex items-center gap-2">
-                <User className="w-4 h-4" />
-                <span className="text-sm">{user?.name}</span>
-                <Badge variant="outline">{user?.role}</Badge>
-              </div>
-              <Button variant="outline" size="sm" onClick={handleLogout}>
-                <LogOut className="w-4 h-4 mr-2" />
-                Logout
-              </Button>
-              <Button variant="outline" size="sm" onClick={() => setIsProfileDialogOpen(true)}>
-                Edit Profile
-              </Button>
-            </div>
-          </div>
-        </div>
-      </header>
+    <div className={darkMode ? "dark" : ""}>
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-950">
+      <DashboardHeader
+        user={user}
+        onLogout={handleLogout}
+        onEditProfile={() => { setProfileError(""); setProfileSuccess(""); setIsProfileDialogOpen(true); }}
+        darkMode={darkMode}
+        onToggleDark={toggleDark}
+      />
 
-      {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="mb-8">
-          <h1 className="text-3xl mb-2">Welcome back, {user?.name}!</h1>
-          <p className="text-gray-600">Here's what's happening with your career journey</p>
+          <h1 className="text-3xl mb-2 dark:text-white">Welcome back, {user?.name}!</h1>
+          <p className="text-gray-600 dark:text-gray-400">Here's what's happening with your career journey</p>
         </div>
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
@@ -387,38 +376,26 @@ function StudentDashboard() {
           {/* Overview Tab */}
           <TabsContent value="overview" className="space-y-6">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              <Card>
+              <Card className="dark:bg-gray-800 dark:border-gray-700">
                 <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-sm font-medium">Upcoming Sessions</CardTitle>
-                  <Calendar className="h-4 w-4 text-muted-foreground" />
+                  <CardTitle className="text-sm font-medium dark:text-gray-200">My Profile</CardTitle>
                 </CardHeader>
-                <CardContent>
-                  <CountUp end={upcomingSessions.length} className="text-2xl font-bold" />
-                  <p className="text-xs text-muted-foreground">Next session on Feb 22</p>
+                <CardContent className="space-y-2 text-sm dark:text-gray-300">
+                  <p><span className="font-medium">Name:</span> {user?.name || "-"}</p>
+                  <p><span className="font-medium">Email:</span> {user?.email || "-"}</p>
+                  <p><span className="font-medium">Phone:</span> {user?.phone || "-"}</p>
+                  <p><span className="font-medium">Institution:</span> {user?.institution || "-"}</p>
+                  <p><span className="font-medium">Interest:</span> {user?.specialization || "-"}</p>
                 </CardContent>
               </Card>
-
-              <Card>
-                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-sm font-medium">Career Matches</CardTitle>
-                  <TrendingUp className="h-4 w-4 text-muted-foreground" />
-                </CardHeader>
-                <CardContent>
-                  <CountUp end={careerPaths.length} className="text-2xl font-bold" />
-                  <p className="text-xs text-muted-foreground">Based on your profile</p>
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-sm font-medium">Resources Accessed</CardTitle>
-                  <BookOpen className="h-4 w-4 text-muted-foreground" />
-                </CardHeader>
-                <CardContent>
-                  <CountUp end={24} className="text-2xl font-bold" />
-                  <p className="text-xs text-muted-foreground">This month</p>
-                </CardContent>
-              </Card>
+              <StatCard
+                title="Upcoming Sessions"
+                value={upcomingSessions.length}
+                icon={Calendar}
+                description={upcomingSessions.length > 0 ? `Next: ${String(upcomingSessions[0].date || "").slice(0, 10)}` : "No upcoming sessions"}
+              />
+              <StatCard title="Career Matches" value={careerPaths.length} icon={TrendingUp} description="Based on your profile" />
+              <StatCard title="Resources Available" value={recentResources.length} icon={BookOpen} description="Career resources" />
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -486,41 +463,16 @@ function StudentDashboard() {
                 {!isSessionsLoading && upcomingSessions.length === 0 && (
                   <p className="text-sm text-gray-500">No sessions scheduled yet.</p>
                 )}
-                {!isSessionsLoading && upcomingSessions.map((session) => (
-                  <div key={session.id} className="flex items-start justify-between p-4 border rounded-lg">
-                    <div className="flex items-start gap-4">
-                      <div className="p-2 bg-indigo-100 rounded">
-                        <Calendar className="w-5 h-5 text-indigo-600" />
-                      </div>
-                      <div>
-                        <h4 className="font-medium">{session.topic}</h4>
-                        <p className="text-sm text-gray-600">with {session.counselor}</p>
-                        <div className="flex items-center gap-4 mt-2 text-sm text-gray-500">
-                          <span>{String(session.date || "").slice(0, 10)}</span>
-                          <span>{to12Hour(session.startTime || session.time)} - {to12Hour(session.endTime)}</span>
-                        </div>
-                        <div className="mt-2">
-                          <Badge variant="outline">{String(session.status || "scheduled")}</Badge>
-                          {isSessionOver(session) && <span className="ml-2 text-xs text-amber-700">session is over</span>}
-                        </div>
-                      </div>
-                    </div>
-                    {isSessionOver(session) ? (
-                      <Button variant="outline" size="sm" onClick={() => handleViewChats(session)}>
-                        View Chats
-                      </Button>
-                    ) : (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        disabled={!canAccessSessionChat(session)}
-                        onClick={() => handleJoinSession(session)}
-                      >
-                        Join Session
-                      </Button>
-                    )}
-                  </div>
-                ))}
+              {!isSessionsLoading && upcomingSessions.map((session) => (
+                <SessionCard
+                  key={session.id}
+                  session={session}
+                  isOver={isSessionOver(session)}
+                  canJoin={canAccessSessionChat(session)}
+                  onJoin={handleJoinSession}
+                  onViewChats={handleViewChats}
+                />
+              ))}
               </CardContent>
             </Card>
           </TabsContent>
@@ -929,6 +881,7 @@ function StudentDashboard() {
         </Dialog>
 
       </main>
+    </div>
     </div>
   );
 }

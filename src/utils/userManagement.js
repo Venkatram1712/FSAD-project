@@ -344,6 +344,22 @@ function installAxiosInterceptors() {
 
 function buildApiUrl(path) {
   const normalizedPath = String(path || "");
+
+  // In local dev, prefer same-origin /api paths so Vite proxy handles backend routing.
+  if (typeof window !== "undefined") {
+    const frontendHost = String(window.location?.hostname || "").toLowerCase();
+    const isLocalFrontend = frontendHost === "localhost" || frontendHost === "127.0.0.1";
+    const isLocalApiBase = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(API_BASE_URL);
+
+    if (isLocalFrontend && isLocalApiBase) {
+      if (!normalizedPath) {
+        return "/";
+      }
+
+      return normalizedPath.startsWith("/") ? normalizedPath : `/${normalizedPath}`;
+    }
+  }
+
   if (!API_BASE_URL) {
     return normalizedPath;
   }
@@ -386,6 +402,9 @@ function sanitizeUser(rawUser) {
   const questionnaireCompleted = hasQuestionnaireCompletedField(rawUser)
     ? Boolean(rawUser?.questionnaireCompleted)
     : undefined;
+  const assignedCounselorId = rawUser?.assignedCounselorId === null || rawUser?.assignedCounselorId === undefined
+    ? null
+    : Number(rawUser.assignedCounselorId);
 
   return {
     id,
@@ -400,6 +419,7 @@ function sanitizeUser(rawUser) {
     institution: String(rawUser?.institution || "").trim(),
     experienceYears: Number.isFinite(Number(rawUser?.experienceYears)) ? Number(rawUser.experienceYears) : null,
     questionnaireCompleted,
+    assignedCounselorId: Number.isFinite(assignedCounselorId) && assignedCounselorId > 0 ? assignedCounselorId : null,
     createdAt: rawUser?.createdAt || inferCreatedAtFromId(id),
     updatedAt: rawUser?.updatedAt || rawUser?.createdAt || inferCreatedAtFromId(id)
   };
@@ -438,6 +458,7 @@ function mapApiUser(apiPayload, email, password) {
     status: payloadUser.status || "active",
     specialization: payloadUser.specialization || "",
     questionnaireCompleted: payloadUser.questionnaireCompleted,
+    assignedCounselorId: payloadUser.assignedCounselorId,
     createdAt: payloadUser.createdAt,
     updatedAt: new Date().toISOString()
   });
@@ -604,11 +625,23 @@ async function registerUserInApi(payload) {
 
 async function createUser(payload, options = {}) {
   const email = String(payload?.email || "").trim().toLowerCase();
-  const existingUsers = await getUsers();
-  const duplicate = existingUsers.find((user) => user.email === email);
+  if (options.skipDuplicateCheck !== true) {
+    try {
+      const existingUsers = await getUsers();
+      const duplicate = existingUsers.find((user) => user.email === email);
 
-  if (duplicate) {
-    return { success: false, error: "EMAIL_EXISTS" };
+      if (duplicate) {
+        return { success: false, error: "EMAIL_EXISTS" };
+      }
+    } catch (error) {
+      const status = Number(error?.response?.status || 0);
+      const authBlocked = status === 401 || status === 403;
+
+      // Public signup should still work even if the users listing endpoints are protected.
+      if (!authBlocked) {
+        console.warn("Skipping duplicate check because users lookup failed:", error?.message);
+      }
+    }
   }
 
   const newUser = sanitizeUser({
@@ -833,6 +866,27 @@ async function getUsers() {
   return fetchUsersFromApi();
 }
 
+async function getUserById(userId) {
+  const normalizedUserId = String(userId || "").trim();
+  if (!normalizedUserId) {
+    return null;
+  }
+
+  try {
+    const responseData = await requestFirst("get", [
+      `/api/users/${normalizedUserId}`,
+      `/api/auth/users/${normalizedUserId}`,
+      `/api/admin/users/${normalizedUserId}`
+    ]);
+
+    const payloadUser = responseData?.user || responseData?.data?.user || responseData?.data || responseData;
+    return payloadUser ? sanitizeUser(payloadUser) : null;
+  } catch (error) {
+    console.warn("Falling back to stored session user because backend refresh failed:", error?.message);
+    return null;
+  }
+}
+
 async function getUsersByRole(role) {
   const normalizedRole = normalizeRole(role);
   const users = await getUsers();
@@ -840,8 +894,17 @@ async function getUsersByRole(role) {
 }
 
 async function getStudents() {
+  const configuredCandidates = [...CONFIGURED_STUDENTS_ENDPOINTS].filter(
+    (endpoint) => endpoint !== "/api/auth/users/students"
+  );
+
   const endpointCandidates = [
-    ...new Set([...CONFIGURED_STUDENTS_ENDPOINTS, ...DEFAULT_STUDENTS_ENDPOINTS])
+    ...new Set([
+      ...configuredCandidates,
+      "/api/users/students",
+      "/api/students",
+      ...DEFAULT_STUDENTS_ENDPOINTS.filter((endpoint) => endpoint !== "/api/auth/users/students")
+    ])
   ];
 
   const responseData = await requestFirst("get", endpointCandidates);
@@ -888,8 +951,7 @@ async function saveQuestionnaireResponse(userId, responseData) {
       industries: Array.isArray(responseData.industries) ? responseData.industries : [],
       workStyle: String(responseData.workStyle || "").trim(),
       skills: String(responseData.skills || "").trim(),
-      timeline: String(responseData.timeline || "").trim(),
-      submittedAt: new Date().toISOString()
+      timeline: String(responseData.timeline || "").trim()
     };
 
     const response = await axios.post(
@@ -908,6 +970,28 @@ async function saveQuestionnaireResponse(userId, responseData) {
       success: false,
       error: error?.response?.status || "SAVE_FAILED"
     };
+  }
+}
+
+async function getQuestionnaireResponse(userId) {
+  if (!API_ENABLED) {
+    console.warn("API disabled: questionnaire response not fetched");
+    return null;
+  }
+
+  try {
+    const response = await axios.get(
+      buildApiUrl(`/api/questionnaire/responses/user/${userId}/latest`)
+    );
+
+    if (!response?.data) {
+      return null;
+    }
+
+    return response.data;
+  } catch (error) {
+    console.error("Failed to fetch questionnaire response:", error?.response?.status, error?.message);
+    return null;
   }
 }
 
@@ -1313,7 +1397,9 @@ export {
   getSignupEvents,
   getStudents,
   getUsers,
+  getUserById,
   getUsersByRole,
+  getQuestionnaireResponse,
   normalizeRole,
   recordLoginEvent,
   recordSignupEvent,

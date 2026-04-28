@@ -8,11 +8,19 @@ import {
   recordLoginEvent,
   restoreAuthSession,
   setActiveSession,
+  getUserById,
   updateUserById
 } from "../utils/userManagement";
 
 const AuthContext = createContext(undefined);
 const QUESTIONNAIRE_COMPLETION_STORAGE_KEY = "questionnaireCompletionByUser";
+
+function normalizeUserRole(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (raw === "role_admin" || raw === "admin") return "admin";
+  if (raw === "role_counselor" || raw === "counselor") return "counselor";
+  return "student";
+}
 
 function getQuestionnaireCompletionKeys(userId, email) {
   const keys = [];
@@ -89,46 +97,99 @@ function toPublicUser(user) {
   
   if (typeof localQuestionnaireState === "boolean") {
     // User has localStorage completion record - use it
-    var hasCompletedQuestionnaire = localQuestionnaireState;
+    let hasCompletedQuestionnaire = localQuestionnaireState;
+    return {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      role: normalizeUserRole(user.role),
+      status: user.status,
+      specialization: user.specialization,
+      phone: user.phone,
+      bio: user.bio,
+      institution: user.institution,
+      experienceYears: user.experienceYears,
+      assignedCounselorId: user.assignedCounselorId ?? null,
+      questionnaireCompleted: Boolean(hasCompletedQuestionnaire),
+      createdAt: user.createdAt
+    };
   } else if (typeof user.questionnaireCompleted === "boolean") {
     // No localStorage, but server has a value - use it
-    var hasCompletedQuestionnaire = user.questionnaireCompleted;
+    let hasCompletedQuestionnaire = user.questionnaireCompleted;
+    return {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      role: normalizeUserRole(user.role),
+      status: user.status,
+      specialization: user.specialization,
+      phone: user.phone,
+      bio: user.bio,
+      institution: user.institution,
+      experienceYears: user.experienceYears,
+      assignedCounselorId: user.assignedCounselorId ?? null,
+      questionnaireCompleted: Boolean(hasCompletedQuestionnaire),
+      createdAt: user.createdAt
+    };
   } else {
     // No data anywhere - default to false (new user)
-    var hasCompletedQuestionnaire = false;
+    return {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      role: normalizeUserRole(user.role),
+      status: user.status,
+      specialization: user.specialization,
+      phone: user.phone,
+      bio: user.bio,
+      institution: user.institution,
+      experienceYears: user.experienceYears,
+      assignedCounselorId: user.assignedCounselorId ?? null,
+      questionnaireCompleted: false,
+      createdAt: user.createdAt
+    };
   }
-
-  return {
-    id: user.id,
-    name: user.name,
-    email: user.email,
-    role: user.role,
-    status: user.status,
-    specialization: user.specialization,
-    phone: user.phone,
-    bio: user.bio,
-    institution: user.institution,
-    experienceYears: user.experienceYears,
-    questionnaireCompleted: Boolean(hasCompletedQuestionnaire),
-    createdAt: user.createdAt
-  };
 }
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
-
-  const isLoading = false;
+  const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    const restored = restoreAuthSession();
-    if (restored?.user) {
-      setUser(toPublicUser(restored.user));
-    }
+    let cancelled = false;
+
+    const bootstrapSession = async () => {
+      try {
+        const restored = restoreAuthSession();
+        if (!restored?.user) {
+          if (!cancelled) {
+            setUser(null);
+          }
+          return;
+        }
+
+        const refreshedUser = (await getUserById(restored.user.id)) || restored.user;
+        if (!cancelled) {
+          setUser(toPublicUser(refreshedUser));
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLoading(false);
+        }
+      }
+    };
+
+    bootstrapSession();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
     const handleSessionExpired = () => {
       setUser(null);
+      setIsLoading(false);
     };
 
     if (typeof window !== "undefined") {
@@ -139,6 +200,7 @@ export function AuthProvider({ children }) {
       const restored = restoreAuthSession();
       if (!restored?.user) {
         setUser((current) => (current ? null : current));
+        setIsLoading(false);
       }
     }, 30000);
 
@@ -164,6 +226,7 @@ export function AuthProvider({ children }) {
 
     const publicUser = toPublicUser(foundUser);
     setUser(publicUser);
+    setIsLoading(false);
 
     if (publicUser.questionnaireCompleted) {
       persistQuestionnaireCompletion(publicUser.id, publicUser.email, true);
@@ -195,7 +258,8 @@ export function AuthProvider({ children }) {
       {
         trackSignup: true,
         source: "signup",
-        syncApi: true
+        syncApi: true,
+        skipDuplicateCheck: true
       }
     );
 
@@ -229,6 +293,7 @@ export function AuthProvider({ children }) {
 
     const publicUser = toPublicUser(sessionUser);
     setUser(publicUser);
+    setIsLoading(false);
 
     return {
       success: true,
@@ -286,7 +351,8 @@ export function AuthProvider({ children }) {
         return { success: false, error: result?.error || "Profile update failed" };
       }
 
-      const nextUser = toPublicUser(result.user);
+      const refreshedUser = (await getUserById(currentUser.id)) || result.user;
+      const nextUser = toPublicUser(refreshedUser);
       setUser(nextUser);
       setActiveSession(nextUser);
       return { success: true, user: nextUser };

@@ -4,8 +4,6 @@ import {
   BarChart,
   BookOpen,
   FileText,
-  GraduationCap,
-  LogOut,
   Plus,
   RefreshCw,
   Settings,
@@ -23,6 +21,8 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { Input } from "../components/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/tabs";
 import { Textarea } from "../components/textarea";
+import StatCard from "../components/StatCard.jsx";
+import DashboardHeader from "../components/DashboardHeader.jsx";
 import {
   createCareerPath,
   createCareerResource,
@@ -46,6 +46,7 @@ import {
   getUsers,
   updateUserById
 } from "../utils/userManagement";
+import axios from "axios";
 
 function formatDate(isoDate) {
   if (!isoDate) {
@@ -65,6 +66,15 @@ function badgeClasses(status) {
   }
 
   return "bg-yellow-50 text-yellow-700";
+}
+
+function counselorLabel(counselors, counselorId) {
+  if (!counselorId) {
+    return "Unassigned";
+  }
+
+  const match = counselors.find((counselor) => String(counselor.id) === String(counselorId));
+  return match ? match.name : `Counselor #${counselorId}`;
 }
 
 function buildActivityFeed() {
@@ -103,6 +113,14 @@ function isStrongPassword(value) {
 export default function AdminDashboard() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  const [darkMode, setDarkMode] = useState(() => localStorage.getItem("darkMode") === "true");
+
+  const toggleDark = () => {
+    setDarkMode((prev) => {
+      localStorage.setItem("darkMode", String(!prev));
+      return !prev;
+    });
+  };
 
   const [careerResources, setCareerResources] = useState([]);
   const [resourceTitle, setResourceTitle] = useState("");
@@ -173,17 +191,24 @@ export default function AdminDashboard() {
 
   const refreshDashboardData = async () => {
     try {
-      const [resources, paths, usersFromApi, metricsSnapshot] = await Promise.all([
+      const [resources, paths, usersFromApi, metricsSnapshot, activityRes] = await Promise.all([
         getCareerResources(),
         getCareerPaths(),
         getUsers(),
-        getAdminMetrics()
+        getAdminMetrics(),
+        axios.get("/api/auth/activity").catch(() => ({ data: [] }))
       ]);
       setCareerResources(resources || []);
       setCareerPaths(paths || []);
       setAllUsers(usersFromApi);
       setMetrics(metricsSnapshot);
-      setActivityFeed(buildActivityFeed());
+      const backendFeed = Array.isArray(activityRes.data) ? activityRes.data : [];
+      const inMemoryFeed = buildActivityFeed();
+      const merged = [...inMemoryFeed, ...backendFeed]
+        .filter((item, idx, arr) => arr.findIndex(e => e.id === item.id) === idx)
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+        .slice(0, 6);
+      setActivityFeed(merged);
       setManagementError("");
     } catch (error) {
       setAllUsers([]);
@@ -568,7 +593,8 @@ export default function AdminDashboard() {
       name: selectedUser.name,
       email: selectedUser.email,
       role: selectedUser.role,
-      status: selectedUser.status
+      status: selectedUser.status,
+      assignedCounselorId: selectedUser.assignedCounselorId || ""
     });
   };
 
@@ -583,7 +609,14 @@ export default function AdminDashboard() {
       return;
     }
 
-    const result = await updateUserById(editingUserId, editingUserDraft);
+    const normalizedAssignmentId = editingUserDraft.assignedCounselorId
+      ? Number(editingUserDraft.assignedCounselorId)
+      : 0;
+
+    const result = await updateUserById(editingUserId, {
+      ...editingUserDraft,
+      assignedCounselorId: normalizedAssignmentId > 0 ? normalizedAssignmentId : 0
+    });
     if (!result.success) {
       setManagementError(result.error || "Failed to update this user.");
       return;
@@ -654,34 +687,17 @@ export default function AdminDashboard() {
     }
   };
 
+  const getCounselorName = (counselorId) => counselorLabel(counselors, counselorId);
+
   return (
-    <div className="min-h-screen bg-gray-50">
-      <header className="bg-white border-b">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-          <div className="flex justify-between items-center">
-            <div className="flex items-center gap-2">
-              <GraduationCap className="w-8 h-8 text-indigo-600" />
-              <span className="text-xl font-semibold">Career Guidance Platform</span>
-            </div>
-            <div className="flex items-center gap-4">
-              <div className="flex items-center gap-2">
-                <User className="w-4 h-4" />
-                <span className="text-sm">{user?.name}</span>
-                <Badge variant="outline">{user?.role}</Badge>
-              </div>
-              <Button variant="outline" size="sm" onClick={handleLogout}>
-                <LogOut className="w-4 h-4 mr-2" />
-                Logout
-              </Button>
-            </div>
-          </div>
-        </div>
-      </header>
+    <div className={darkMode ? "dark" : ""}>
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-950">
+      <DashboardHeader user={user} onLogout={handleLogout} darkMode={darkMode} onToggleDark={toggleDark} />
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="mb-8">
-          <h1 className="text-3xl mb-2">Admin Dashboard</h1>
-          <p className="text-gray-600">Manage users, counselors, resources, and login/signup analytics</p>
+          <h1 className="text-3xl mb-2 dark:text-white">Admin Dashboard</h1>
+          <p className="text-gray-600 dark:text-gray-400">Manage users, counselors, resources, and login/signup analytics</p>
         </div>
 
         {managementError && <p className="mb-4 text-sm text-red-600">{managementError}</p>}
@@ -697,49 +713,10 @@ export default function AdminDashboard() {
 
           <TabsContent value="overview" className="space-y-6">
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-              <Card>
-                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-sm font-medium">Total Users</CardTitle>
-                  <Users className="h-4 w-4 text-muted-foreground" />
-                </CardHeader>
-                <CardContent>
-                  <CountUp end={metrics.totalUsers} className="text-2xl font-bold" />
-                  <p className="text-xs text-muted-foreground">All registered accounts</p>
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-sm font-medium">Signups</CardTitle>
-                  <TrendingUp className="h-4 w-4 text-muted-foreground" />
-                </CardHeader>
-                <CardContent>
-                  <CountUp end={metrics.totalSignups} className="text-2xl font-bold" />
-                  <p className="text-xs text-muted-foreground">Historical signup events</p>
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-sm font-medium">Login Events</CardTitle>
-                  <BarChart className="h-4 w-4 text-muted-foreground" />
-                </CardHeader>
-                <CardContent>
-                  <CountUp end={metrics.totalLoginEvents} className="text-2xl font-bold" />
-                  <p className="text-xs text-muted-foreground">Total successful logins</p>
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-sm font-medium">Logged In Now</CardTitle>
-                  <User className="h-4 w-4 text-muted-foreground" />
-                </CardHeader>
-                <CardContent>
-                  <CountUp end={metrics.currentlyLoggedInUsers} className="text-2xl font-bold" />
-                  <p className="text-xs text-muted-foreground">Active sessions in storage</p>
-                </CardContent>
-              </Card>
+              <StatCard title="Total Users" value={metrics.totalUsers} icon={Users} description="All registered accounts" />
+              <StatCard title="Signups" value={metrics.totalSignups} icon={TrendingUp} description="Historical signup events" />
+              <StatCard title="Login Events" value={metrics.totalLoginEvents} icon={BarChart} description="Total successful logins" />
+              <StatCard title="Logged In Now" value={metrics.currentlyLoggedInUsers} description="Active sessions in storage" />
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -855,6 +832,7 @@ export default function AdminDashboard() {
                         <th className="text-left py-2">Name</th>
                         <th className="text-left py-2">Email</th>
                         <th className="text-left py-2">Role</th>
+                        <th className="text-left py-2">Assigned Counselor</th>
                         <th className="text-left py-2">Status</th>
                         <th className="text-left py-2">Actions</th>
                       </tr>
@@ -892,6 +870,35 @@ export default function AdminDashboard() {
                               <Badge variant="outline">{editingUserDraft.role || listedUser.role}</Badge>
                             ) : (
                               <Badge variant="outline">{listedUser.role}</Badge>
+                            )}
+                          </td>
+                          <td className="py-2">
+                            {listedUser.role === "student" ? (
+                              editingUserId === listedUser.id ? (
+                                <select
+                                  className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"
+                                  value={editingUserDraft.assignedCounselorId || "0"}
+                                  onChange={(event) =>
+                                    setEditingUserDraft((previous) => ({
+                                      ...previous,
+                                      assignedCounselorId: event.target.value
+                                    }))
+                                  }
+                                >
+                                  <option value="0">Unassigned</option>
+                                  {counselors.map((counselor) => (
+                                    <option key={counselor.id} value={String(counselor.id)}>
+                                      {counselor.name}
+                                    </option>
+                                  ))}
+                                </select>
+                              ) : (
+                                <span className="text-sm text-gray-700">
+                                  {getCounselorName(listedUser.assignedCounselorId)}
+                                </span>
+                              )
+                            ) : (
+                              <span className="text-sm text-gray-400">-</span>
                             )}
                           </td>
                           <td className="py-2">
@@ -948,7 +955,7 @@ export default function AdminDashboard() {
                       ))}
                       {users.length === 0 && (
                         <tr>
-                          <td className="py-4 text-gray-500" colSpan={5}>
+                          <td className="py-4 text-gray-500" colSpan={6}>
                             No users found.
                           </td>
                         </tr>
@@ -1516,6 +1523,7 @@ export default function AdminDashboard() {
           </TabsContent>
         </Tabs>
       </main>
+    </div>
     </div>
   );
 }
