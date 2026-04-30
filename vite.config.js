@@ -7,9 +7,8 @@ export default defineConfig({
   server: {
     proxy: {
       "/api": {
-        target: "https://venkatram1712.github.io/FSAD-backend-p",
-        changeOrigin: true,
-        secure: true
+        target: "http://localhost:8080",
+        changeOrigin: true
       }
     }
   }

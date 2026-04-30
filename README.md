@@ -26,7 +26,7 @@ Role-based career guidance application built with React + Vite.
 Create a `.env` file in the project root if needed:
 
 ```
-VITE_API_BASE_URL=http://localhost:8080
+VITE_API_BASE_URL=https://fasd-backend-project-production.up.railway.app
 VITE_USERS_ENDPOINTS=/api/users,/api/auth/users,/api/admin/users
 VITE_STUDENTS_ENDPOINTS=/api/auth/users/students,/api/users/students,/api/students
 ```
